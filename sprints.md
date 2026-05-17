@@ -21,21 +21,21 @@
 
 ## Phase 1: MVP Foundation (Sprints 1–4)
 
-### Sprint 1: Project Scaffolding & Core Shell
+### Sprint 1: Project Scaffolding & Core Shell [DONE]
 **Goal**: Initialize the monorepo with Tauri + Python FastAPI, establish project structure.
 **Duration**: 1 week
 
-- [ ] Initialize Tauri v2 project with React 19 + TypeScript frontend in `Cursor-king/`
-- [ ] Set up Python FastAPI backend in `backend/` with `pyproject.toml`
-- [ ] Create folder structure per architecture plan:
+- [x] Initialize Tauri v2 project with React 19 + TypeScript frontend in `Cursor-king/`
+- [x] Set up Python FastAPI backend in `backend/` with `pyproject.toml`
+- [x] Create folder structure per architecture plan:
   - `src-tauri/src/` (Rust: main.rs, lib.rs, capture.rs, cursor.rs, overlay.rs, sidecar.rs)
   - `src/` (React: App.tsx, components/, hooks/, stores/, types/)
   - `backend/` (Python: main.py, core/, vision/, llm/, task/)
-- [ ] Implement system tray with menu items: Start, Stop, Settings, Quit
-- [ ] Register global hotkey `Ctrl+Alt+K` to toggle main window
-- [ ] Create dev launcher script (`scripts/dev.ps1`) that starts both Tauri and FastAPI
-- [ ] Set up `.gitignore`, `.env.example`, README.md
-- [ ] Verify both processes start and run independently
+- [x] Implement system tray with menu items: Start, Stop, Settings, Quit
+- [x] Register global hotkey `Ctrl+Alt+K` to toggle main window
+- [x] Create dev launcher script (`scripts/dev.ps1`) that starts both Tauri and FastAPI
+- [x] Set up `.gitignore`, `.env.example`, README.md
+- [x] Verify both processes start and run independently
 
 **Implementation Detail**: Tauri spawns FastAPI as a sidecar. During dev, run them separately with the launcher script.
 
