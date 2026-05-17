@@ -1,0 +1,30 @@
+[tool.poetry]
+name = "cursor-king-backend"
+version = "0.1.0"
+description = "FastAPI Backend sidecar for Cursor-King AI Desktop Guidance Assistant"
+authors = ["Your Name <you@example.com>"]
+readme = "README.md"
+packages = [{include = "backend"}]
+
+[tool.poetry.dependencies]
+python = "^3.11"
+fastapi = "^0.110.0"
+uvicorn = {extras = ["standard"], version = "^0.28.0"}
+websockets = "^12.0"
+pydantic = "^2.6.4"
+pywinauto = {version = "^0.6.8", platform = "win32"}
+pyautogui = "^0.9.54"
+pillow = "^10.2.0"
+opencv-python = "^4.9.0.80"
+paddleocr = {version = "^2.7.3", optional = true}
+openai = "^1.14.1"
+keyring = "^24.3.1"
+structlog = "^24.1.0"
+python-dotenv = "^1.0.1"
+
+[tool.poetry.extras]
+ocr = ["paddleocr"]
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
