@@ -108,7 +108,12 @@ class WsConnectionManager:
             if message_type in self.message_handlers:
                 handler = self.message_handlers[message_type]
                 try:
-                    await handler(message, client_id)
+                    if message_type in [MessageType.SCREENSHOT, MessageType.TASK_START]:
+                        # Run heavy visual parsing and planning in a background task
+                        # to keep the WebSocket server responsive to health checks
+                        asyncio.create_task(handler(message, client_id))
+                    else:
+                        await handler(message, client_id)
                 except Exception as e:
                     logger.error(f"Handler error for '{message_type}': {e}", exc_info=True)
                     await self.send_error(f"Handler error: {str(e)}", client_id)

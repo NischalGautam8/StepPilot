@@ -43,6 +43,7 @@ pub enum WsMessage {
     /// Acknowledgement
     Ack {
         received: String,
+        elements: Option<Vec<ElementInfo>>,
     },
     /// Ping/Pong for health check
     Ping,
@@ -52,18 +53,16 @@ pub enum WsMessage {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ElementInfo {
     pub id: String,
+    #[serde(rename = "type")]
     pub element_type: String,
     pub text: String,
-    pub bbox: BoundingBox,
+    pub bbox: Vec<i32>,
+    pub confidence: f32,
+    pub source: String,
+    pub enabled: bool,
+    pub automation_id: String,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct BoundingBox {
-    pub x: i32,
-    pub y: i32,
-    pub width: i32,
-    pub height: i32,
-}
 
 /// WebSocket client with reconnection logic
 pub struct WsClient {
@@ -134,26 +133,35 @@ impl WsClient {
         }
     }
 
-    /// Receive a message from the WebSocket server
+    /// Receive a message from the WebSocket server, ignoring pings
     pub async fn receive(&self) -> Result<Option<WsMessage>, String> {
         let mut sender_guard = self.sender.lock().await;
         
         if let Some(ws_stream) = sender_guard.as_mut() {
-            match ws_stream.next().await {
-                Some(Ok(Message::Text(text))) => {
-                    let message: WsMessage = serde_json::from_str(&text)
-                        .map_err(|e| format!("Failed to deserialize message: {}", e))?;
-                    Ok(Some(message))
+            while let Some(msg_result) = ws_stream.next().await {
+                match msg_result {
+                    Ok(Message::Text(text)) => {
+                        // Check if it's a server ping message
+                        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&text) {
+                            if parsed.get("type").and_then(|t| t.as_str()) == Some("ping") {
+                                continue; // Ignore ping, wait for real message
+                            }
+                        }
+                        
+                        let message: WsMessage = serde_json::from_str(&text)
+                            .map_err(|e| format!("Failed to deserialize message: {}", e))?;
+                        return Ok(Some(message));
+                    }
+                    Ok(Message::Close(_)) => {
+                        println!("WebSocket connection closed by server");
+                        *sender_guard = None;
+                        return Err("Connection closed".to_string());
+                    }
+                    Err(e) => return Err(format!("WebSocket error: {}", e)),
+                    _ => {}
                 }
-                Some(Ok(Message::Close(_))) => {
-                    println!("WebSocket connection closed by server");
-                    *sender_guard = None;
-                    Err("Connection closed".to_string())
-                }
-                Some(Err(e)) => Err(format!("WebSocket error: {}", e)),
-                None => Ok(None),
-                _ => Ok(None),
             }
+            Ok(None)
         } else {
             Err("WebSocket not connected".to_string())
         }
@@ -209,18 +217,16 @@ pub async fn ws_connect(url: String) -> Result<String, String> {
     Ok("Connected".to_string())
 }
 
-/// Tauri command to send screenshot via WebSocket
+/// Tauri command to send screenshot via WebSocket and wait for ACK with elements
 #[tauri::command]
 pub async fn ws_send_screenshot(
     url: String,
     data: String,
     width: u32,
     height: u32,
-) -> Result<(), String> {
+) -> Result<WsMessage, String> {
     let client = WsClient::new(url);
-    if !client.is_connected().await {
-        client.connect().await?;
-    }
+    client.connect().await?;
     
     let timestamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -234,5 +240,64 @@ pub async fn ws_send_screenshot(
             height,
             timestamp,
         })
-        .await
+        .await?;
+        
+    // Wait for the ACK containing parsed elements
+    match client.receive().await? {
+        Some(msg) => Ok(msg),
+        None => Err("No response received from server".to_string())
+    }
 }
+
+/// Tauri command to send task start via WebSocket and wait for ACK with the generated plan
+#[tauri::command]
+pub async fn ws_send_task_start(
+    url: String,
+    query: String,
+) -> Result<serde_json::Value, String> {
+    let client = WsClient::new(url);
+    client.connect().await?;
+    
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    
+    client
+        .send(WsMessage::TaskStart {
+            query,
+            timestamp,
+        })
+        .await?;
+        
+    // Wait for the ACK containing planning results
+    let mut sender_guard = client.sender.lock().await;
+    if let Some(ws_stream) = sender_guard.as_mut() {
+        while let Some(msg_result) = ws_stream.next().await {
+            match msg_result {
+                Ok(Message::Text(text)) => {
+                    let parsed: serde_json::Value = serde_json::from_str(&text)
+                        .map_err(|e| format!("Failed to parse response JSON: {}", e))?;
+                    
+                    // Ignore ping messages from the server
+                    if parsed.get("type").and_then(|t| t.as_str()) == Some("ping") {
+                        continue;
+                    }
+                    
+                    return Ok(parsed);
+                }
+                Ok(Message::Close(_)) => {
+                    *sender_guard = None;
+                    return Err("Connection closed".to_string());
+                }
+                Err(e) => return Err(format!("WebSocket error: {}", e)),
+                _ => {} // Ignore other frames
+            }
+        }
+        Err("No response received from server".to_string())
+    } else {
+        Err("WebSocket not connected".to_string())
+    }
+}
+
+

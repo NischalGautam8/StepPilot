@@ -63,7 +63,7 @@ fn capture_screen_internal(check_diff: bool) -> Result<String, String> {
     // Differential detection: compute hash and compare
     if check_diff {
         let mut hasher = Sha256::new();
-        hasher.update(&img);
+        hasher.update(img.as_raw());
         let current_hash = hasher.finalize().to_vec();
         
         let mut last_hash = LAST_SCREENSHOT_HASH.lock().unwrap();

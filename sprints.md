@@ -65,53 +65,55 @@
 
 ---
 
-### Sprint 3: OCR & Element Detection Pipeline
+### Sprint 3: OCR & Element Detection Pipeline [DONE]
 **Goal**: Extract text and detect UI elements from screenshots.
 **Duration**: 1 week
 
-- [ ] Install and configure PaddleOCR v4 in Python backend
+- [x] Install and configure PaddleOCR v4 in Python backend
   - `use_angle_cls=True`, `lang='en'`, `use_gpu=False`
   - Lower `det_db_thresh=0.3` for UI text sensitivity
-- [ ] Create `OCREngine` class returning `[{text, bbox, confidence}]`
-- [ ] Implement Windows Accessibility API reader using `pywinauto`
+- [x] Create `OCREngine` class returning `[{text, bbox, confidence}]`
+- [x] Implement Windows Accessibility API reader using `pywinauto`
   - `Desktop(backend="uia")` for active window element tree
   - Extract: control_type, name, bbox, enabled, automation_id
-- [ ] Create `ElementMerger` that combines OCR + Accessibility results
+- [x] Create `ElementMerger` that combines OCR + Accessibility results
   - Dedup overlapping bounding boxes (IoU > 0.7)
   - Prefer A11y type info, OCR text content
   - Assign unique element IDs
-- [ ] Create unified `UIElement` schema:
+- [x] Create unified `UIElement` schema:
   ```
   {id, type, text, bbox, confidence, source, enabled, automation_id}
   ```
-- [ ] Build `ScreenParser` facade that orchestrates OCR + A11y in parallel
-- [ ] Add preprocessing: resize to 1280x720 before OCR, contrast enhancement
-- [ ] Verify: screenshot → parse → log detected elements with bounding boxes
+- [x] Build `ScreenParser` facade that orchestrates OCR + A11y in parallel
+- [x] Add preprocessing: resize to 1280x720 before OCR, contrast enhancement
+- [x] Verify: screenshot → parse → log detected elements with bounding boxes
+
 
 **Implementation Detail**: OCR and A11y run concurrently via `asyncio.gather()`. A11y is primary when available; OCR fills gaps for custom-drawn UIs.
 
 ---
 
-### Sprint 4: LLM Integration & Task Planning
+### Sprint 4: LLM Integration & Task Planning [DONE]
 **Goal**: Connect to GitHub Copilot SDK / OpenAI API for task decomposition.
 **Duration**: 1 week
 
-- [ ] Install GitHub Copilot SDK (`pip install github-copilot-sdk`)
-- [ ] Create abstract `LLMProvider` base class with `complete()` and `stream()` methods
-- [ ] Implement `CopilotProvider` using GitHub Copilot SDK
+- [x] Install GitHub Copilot SDK (`pip install github-copilot-sdk`)
+- [x] Create abstract `LLMProvider` base class with `complete()` and `stream()` methods
+- [x] Implement `CopilotProvider` using GitHub Copilot SDK
   - Support vision (screenshot blob attachments)
   - Support tool calling schema
-- [ ] Implement `OpenAIProvider` using `openai` Python SDK
+- [x] Implement `OpenAIProvider` using `openai` Python SDK
   - `gpt-4o-mini` for text-only analysis (cheap)
   - `gpt-4o` for vision analysis (when screenshot needed)
-- [ ] Create `LLMOrchestrator` with provider switching via config
-- [ ] Implement token-minimization strategies:
+- [x] Create `LLMOrchestrator` with provider switching via config
+- [x] Implement token-minimization strategies:
   - Compact element format: `1:Button"Send"(1020,750,40,40)`
   - Text-first mode (send element registry, not screenshot)
   - Vision mode only when OCR confidence < 0.7
-- [ ] Write system prompt, task planner prompt, step execution prompt
-- [ ] Implement task decomposition: user query + elements → ordered steps
-- [ ] Verify: send elements + query → receive step plan as structured JSON
+- [x] Write system prompt, task planner prompt, step execution prompt
+- [x] Implement task decomposition: user query + elements → ordered steps
+- [x] Verify: send elements + query → receive step plan as structured JSON
+
 
 **Implementation Detail**: Default to Copilot SDK. Fall back to OpenAI API if Copilot unavailable. Text-only mode for 90%+ of calls to minimize costs.
 

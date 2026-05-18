@@ -55,7 +55,8 @@ pub fn run() {
             sidecar::start_sidecar,
             sidecar::stop_sidecar,
             ws_client::ws_connect,
-            ws_client::ws_send_screenshot
+            ws_client::ws_send_screenshot,
+            ws_client::ws_send_task_start
         ])
         .setup(|app| {
             // Register global hotkey: Ctrl + Alt + K
