@@ -1,5 +1,6 @@
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { emitTo, listen } from '@tauri-apps/api/event';
 
 interface UIElement {
   id: string;
@@ -45,6 +46,43 @@ export function ScreenCaptureTest() {
     }>;
   } | null>(null);
 
+  const [activeStepIndex, setActiveStepIndex] = useState<number | null>(null);
+
+  // Sync refs to prevent state stale closures inside the Tauri global listener
+  const activeStepIndexRef = useRef<number | null>(null);
+  const generatedPlanRef = useRef<any>(null);
+
+  useEffect(() => {
+    activeStepIndexRef.current = activeStepIndex;
+  }, [activeStepIndex]);
+
+  useEffect(() => {
+    generatedPlanRef.current = generatedPlan;
+  }, [generatedPlan]);
+
+  // Listen for native click monitoring events and manual next step clicks from overlay
+  useEffect(() => {
+    const handleAdvance = () => {
+      const prevIndex = activeStepIndexRef.current;
+      const plan = generatedPlanRef.current;
+      
+      console.log("Step progression triggered! Current index:", prevIndex);
+      if (prevIndex !== null && plan && plan.steps && prevIndex < (plan.steps.length - 1)) {
+        showStepGuidance(prevIndex + 1, plan);
+      } else {
+        clearStepGuidance();
+      }
+    };
+
+    const unlistenAuto = listen<any>("auto-advance-step", handleAdvance);
+    const unlistenManual = listen<any>("request-next-step", handleAdvance);
+
+    return () => {
+      unlistenAuto.then((fn) => fn());
+      unlistenManual.then((fn) => fn());
+    };
+  }, []);
+
   const WS_URL = 'ws://127.0.0.1:8765/ws';
 
   const connectWebSocket = async () => {
@@ -58,6 +96,10 @@ export function ScreenCaptureTest() {
       setWsConnected(false);
     }
   };
+
+  useEffect(() => {
+    connectWebSocket();
+  }, []);
 
   const processResponse = (response: any, screenshotSize: number) => {
     if (response && response.type === 'ack' && response.elements) {
@@ -158,8 +200,72 @@ export function ScreenCaptureTest() {
         if (plan.error) {
           setPlanningStatus(`Failed: ${plan.error}`);
         } else {
+          // Intelligent client-side heuristics mapping for element bounding boxes
+          if (plan.steps) {
+            plan.steps = plan.steps.map((step: any) => {
+              const queryLower = step.description.toLowerCase();
+              
+              // If coordinates are missing, empty, or zero-sized, search for text-based match or taskbar fallback
+              const isBboxEmpty = !step.bbox || step.bbox.length !== 4 || (step.bbox[2] === 0 && step.bbox[3] === 0);
+              if (isBboxEmpty || !step.target_element_id) {
+                 // Heuristic 1: Dynamic application keyword search inside parsed elements list
+                 const words = queryLower
+                    .replace(/[.,\/#!$%\^&\*;:{}=\-_`~()]/g, "")
+                    .split(/\s+/)
+                    .filter((w: string) => w.length >= 3);
+                 let matchedEl = null;
+                 
+                 for (const word of words) {
+                   // Skip generic terms
+                   if (["click", "open", "launch", "icon", "icons", "taskbar", "button", "buttons", "application", "windows", "the", "your", "this", "app", "apps", "shortcut", "shortcuts"].includes(word)) {
+                     continue;
+                   }
+                   
+                   matchedEl = detectedElements.find(el => 
+                     el.text && el.text.toLowerCase().includes(word)
+                   );
+                   if (matchedEl) {
+                     console.log(`Heuristics Fallback: Dynamic match for keyword '${word}' to element:`, matchedEl);
+                     break;
+                   }
+                 }
+                 
+                 if (matchedEl) {
+                   console.log("Heuristics Fallback: Bound missing step target to element:", matchedEl);
+                   return {
+                     ...step,
+                     target_element_id: matchedEl.id,
+                     bbox: matchedEl.bbox
+                   };
+                 }
+                
+                // Heuristic 2: Taskbar location geometry mapping fallback for taskbar and icon shortcuts
+                if (queryLower.includes("taskbar") || queryLower.includes("docker") || queryLower.includes("slack") || queryLower.includes("icon")) {
+                  const screenW = window.screen.width || 1920;
+                  const screenH = window.screen.height || 1080;
+                  
+                  // Center-right Windows 11 pinned buttons alignment coordinate estimation
+                  const fallbackX = Math.round(screenW / 2) + 40;
+                  const fallbackY = screenH - 24; // Taskbar vertical center
+                  
+                  console.log(`Heuristics Fallback: Applied estimated taskbar geometry [X=${fallbackX}, Y=${fallbackY}]`);
+                  return {
+                    ...step,
+                    target_element_id: "elem_docker_taskbar_fallback",
+                    bbox: [fallbackX - 20, fallbackY - 20, 40, 40]
+                  };
+                }
+              }
+              return step;
+            });
+          }
+
           setGeneratedPlan(plan);
           setPlanningStatus(`Guidance plan successfully generated! Found ${plan.steps?.length || 0} steps.`);
+          // Auto-trigger Step 1 guidance on the transparent overlay!
+          if (plan.steps && plan.steps.length > 0) {
+            showStepGuidance(0, plan);
+          }
         }
       } else if (response && response.error) {
         setPlanningStatus(`Task planning failed: ${response.error}`);
@@ -169,6 +275,62 @@ export function ScreenCaptureTest() {
     } catch (error) {
       setIsPlanning(false);
       setPlanningStatus(`Task planning error: ${error}`);
+    }
+  };
+
+  const showStepGuidance = async (index: number, plan = generatedPlan) => {
+    if (!plan || !plan.steps || plan.steps.length <= index) return;
+    
+    const step = plan.steps[index];
+    setActiveStepIndex(index);
+    
+    try {
+      // 1. Ensure transparency overlay window is visible
+      await invoke('toggle_overlay', { show: true });
+
+      // 2. Register coordinates in Rust for background left-click polling
+      if (step.bbox && step.bbox.length === 4 && (step.bbox[2] > 0 || step.bbox[3] > 0)) {
+        await invoke('set_active_target_bbox', {
+          x: step.bbox[0],
+          y: step.bbox[1],
+          w: step.bbox[2],
+          h: step.bbox[3]
+        });
+      } else {
+        await invoke('set_active_target_bbox', { x: 0, y: 0, w: 0, h: 0 });
+      }
+      
+      // 3. Emit active guidance hint directly to the overlay window
+      await emitTo('overlay', 'show-guidance-hint', {
+        step_number: step.step_number,
+        total_steps: plan.steps.length,
+        description: step.description,
+        action: step.action,
+        bbox: step.bbox,
+        target_element_id: step.target_element_id
+      });
+      
+      setStatus(`Overlay guidance active: Step ${step.step_number} ("${step.description}")`);
+    } catch (err) {
+      setStatus(`Failed to trigger overlay: ${err}`);
+    }
+  };
+
+  const clearStepGuidance = async () => {
+    setActiveStepIndex(null);
+    try {
+      // 1. Clear coordinates in Rust to stop polling
+      await invoke('set_active_target_bbox', { x: 0, y: 0, w: 0, h: 0 });
+
+      // 2. Emit clear event directly to the overlay window
+      await emitTo('overlay', 'clear-guidance-hint', {});
+      
+      // 3. Hide overlay window in Rust
+      await invoke('toggle_overlay', { show: false });
+      
+      setStatus('Overlay guidance cleared.');
+    } catch (err) {
+      setStatus(`Failed to clear overlay: ${err}`);
     }
   };
 
@@ -492,9 +654,45 @@ export function ScreenCaptureTest() {
             {/* Steps Roadmap Render */}
             {generatedPlan && (
               <div style={{ marginTop: '10px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                <h4 style={{ fontSize: '14px', fontWeight: 600, margin: 0, color: '#cbd5e1' }}>
-                  Step-by-Step Guidance Roadmap:
-                </h4>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
+                  <h4 style={{ fontSize: '14px', fontWeight: 600, margin: 0, color: '#cbd5e1' }}>
+                    Step-by-Step Guidance Roadmap:
+                  </h4>
+                  <div style={{ display: 'flex', gap: '8px' }}>
+                    <button
+                      onClick={clearStepGuidance}
+                      style={{
+                        background: 'rgba(239, 68, 68, 0.1)',
+                        color: '#f87171',
+                        border: '1px solid rgba(239, 68, 68, 0.3)',
+                        borderRadius: '4px',
+                        padding: '4px 10px',
+                        fontSize: '11px',
+                        fontWeight: 600,
+                        cursor: 'pointer'
+                      }}
+                    >
+                      Clear Overlay
+                    </button>
+                    {activeStepIndex !== null && activeStepIndex < (generatedPlan.steps.length - 1) && (
+                      <button
+                        onClick={() => showStepGuidance(activeStepIndex + 1)}
+                        style={{
+                          background: 'rgba(168, 85, 247, 0.15)',
+                          color: '#c084fc',
+                          border: '1px solid rgba(168, 85, 247, 0.4)',
+                          borderRadius: '4px',
+                          padding: '4px 10px',
+                          fontSize: '11px',
+                          fontWeight: 600,
+                          cursor: 'pointer'
+                        }}
+                      >
+                        Next Step →
+                      </button>
+                    )}
+                  </div>
+                </div>
                 
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
                   {generatedPlan.steps.map((step) => {
@@ -508,35 +706,51 @@ export function ScreenCaptureTest() {
                       actionBg = 'rgba(251, 191, 36, 0.1)';
                     }
                     
+                    const isActive = activeStepIndex === (step.step_number - 1);
+                    
                     return (
-                      <div key={step.step_number} style={{
-                        background: 'rgba(30, 41, 59, 0.5)',
-                        border: '1px solid #334155',
-                        borderRadius: '8px',
-                        padding: '12px 16px',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'space-between',
-                        gap: '15px'
-                      }}>
+                      <div
+                        key={step.step_number}
+                        onClick={() => showStepGuidance(step.step_number - 1)}
+                        style={{
+                          background: isActive ? 'rgba(124, 58, 237, 0.12)' : 'rgba(30, 41, 59, 0.5)',
+                          border: isActive ? '1px solid #c084fc' : '1px solid #334155',
+                          boxShadow: isActive ? '0 0 15px rgba(192, 132, 252, 0.25)' : 'none',
+                          borderRadius: '8px',
+                          padding: '12px 16px',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'space-between',
+                          gap: '15px',
+                          cursor: 'pointer',
+                          transition: 'all 0.2s ease-in-out'
+                        }}
+                      >
                         <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
                           <span style={{
                             width: '24px',
                             height: '24px',
                             borderRadius: '50%',
-                            background: '#7c3aed',
+                            background: isActive ? '#c084fc' : '#7c3aed',
                             color: '#ffffff',
                             display: 'flex',
                             alignItems: 'center',
                             justifyContent: 'center',
                             fontSize: '12px',
-                            fontWeight: 'bold'
+                            fontWeight: 'bold',
+                            boxShadow: isActive ? '0 0 8px #c084fc' : 'none'
                           }}>
                             {step.step_number}
                           </span>
                           
                           <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
-                            <span style={{ fontSize: '13px', color: '#f1f5f9' }}>{step.description}</span>
+                            <span style={{
+                              fontSize: '13px',
+                              color: isActive ? '#ffffff' : '#f1f5f9',
+                              fontWeight: isActive ? 600 : 500
+                            }}>
+                              {step.description}
+                            </span>
                             {step.target_element_id && (
                               <span style={{ fontSize: '11px', color: '#94a3b8' }}>
                                 Target ID: <strong style={{ color: '#fbbf24' }}>{step.target_element_id}</strong>
