@@ -97,8 +97,8 @@ class A11yReader:
                 logger.info(f"Inspecting taskbar UIA tree: [HWND {taskbar_hwnd}]")
                 try:
                     taskbar_window = desktop.window(handle=taskbar_hwnd)
-                    # Use a shallow depth traversal (depth=4) for taskbar to keep it ultra-fast
-                    traverse(taskbar_window, max_depth_override=4)
+                    # Use a depth of 6 to traverse taskbar icons, MSTaskListClass, and system tray safely
+                    traverse(taskbar_window, max_depth_override=6)
                 except Exception as te:
                     logger.debug(f"Taskbar UIA sweep skipped: {te}")
 

@@ -125,19 +125,19 @@
 **Goal**: Create the transparent click-through overlay and render basic shapes.
 **Duration**: 1 week
 
-- [ ] Create second Tauri window "overlay" with:
+- [x] Create second Tauri window "overlay" with:
   - `transparent(true)`, `decorations(false)`, `always_on_top(true)`
   - Full-screen dimensions matching primary monitor
   - `set_ignore_cursor_events(true)` for click-through
-- [ ] Set up Tauri permissions in `capabilities/default.json`
-- [ ] Create overlay entry point (`overlay.html` / `Overlay.tsx`)
-- [ ] Implement full-screen SVG canvas component
-- [ ] Build `BoundingBox` component: colored rectangle with glow animation
-- [ ] Build `Tooltip` component: positioned label with instruction text
-- [ ] Build `CircleIndicator` component: pulsing circle at target coordinates
-- [ ] Implement overlay state management (Zustand store for active hints)
-- [ ] Wire WebSocket messages from Python → Rust → Overlay window
-- [ ] Verify: manually send a hint → see bounding box + tooltip on overlay
+- [x] Set up Tauri permissions in `capabilities/default.json`
+- [x] Create overlay entry point (`overlay.html` / `Overlay.tsx`)
+- [x] Implement full-screen SVG canvas component
+- [x] Build `BoundingBox` component: colored rectangle with glow animation
+- [x] Build `Tooltip` component: positioned label with instruction text
+- [x] Build `CircleIndicator` component: pulsing circle at target coordinates
+- [x] Implement overlay state management (Zustand store for active hints)
+- [x] Wire WebSocket messages from Python → Rust → Overlay window
+- [x] Verify: manually send a hint → see bounding box + tooltip on overlay
 
 **Implementation Detail**: Overlay window is created on app start but hidden. Shown when task is active. Uses CSS `pointer-events: none` for click-through on web side.
 
@@ -154,14 +154,13 @@
   - Green glow effect via `filter: drop-shadow`
 - [ ] Add arrow from current cursor position to target element
 - [ ] Track real-time cursor position from Rust → frontend (throttled to 30fps)
-- [ ] Create `GuidanceRenderer` component that combines:
-  - Arrow (cursor → target)
+- [x] Create `GuidanceRenderer` component that combines:
   - BoundingBox (around target element)
   - Tooltip (instruction text near target)
   - Pulse animation on target
-- [ ] Implement step transition animations (fade out old, fade in new)
-- [ ] Wire full loop: user types task → LLM plans → overlay shows Step 1 guidance
-- [ ] Add step counter badge: "Step 1 of 5"
+- [x] Implement step transition animations (fade out old, fade in new)
+- [x] Wire full loop: user types task → LLM plans → overlay shows Step 1 guidance
+- [x] Add step counter badge: "Step 1 of 5"
 - [ ] Verify: complete task "open Notepad" with guided arrows
 
 **Implementation Detail**: Cursor position from `GetCursorPos` Win32 API via Rust, sent as `cursor_pos` WS message. Arrow updates smoothly using `requestAnimationFrame`.
@@ -177,12 +176,11 @@
   - Re-run OCR + A11y on new state
   - Compare element states: did target change? Did new elements appear?
 - [ ] Create `TaskEngine` state machine: IDLE → PLANNING → GUIDING → VERIFYING → COMPLETE
-- [ ] Implement automatic re-capture trigger:
+- [x] Implement automatic re-capture trigger:
   - Listen for mouse click events (from Rust cursor tracker)
-  - Listen for keyboard events (global key hook via Rust)
-  - Debounce: wait 500ms after last event before re-capture
+- [ ] Debounce: wait 500ms after last event before re-capture
 - [ ] Implement retry logic: max 3 retries per step, then re-plan
-- [ ] Add "Did this work?" confirmation button (temporarily disable click-through)
+- [x] Add "Did this work?" confirmation button (temporarily disable click-through)
 - [ ] Implement re-planning: if verification fails 3x, ask LLM to re-analyze
 - [ ] Add task completion celebration: ✓ animation + "Task complete!" overlay
 - [ ] Verify: complete a 3+ step task end-to-end (e.g., "rename a file on desktop")
