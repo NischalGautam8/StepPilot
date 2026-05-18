@@ -29,6 +29,22 @@ export function ScreenCaptureTest() {
   } | null>(null);
   const [searchQuery, setSearchQuery] = useState<string>('');
 
+  // AI Task Planner states
+  const [taskQuery, setTaskQuery] = useState<string>('Click Connect WebSocket button');
+  const [planningStatus, setPlanningStatus] = useState<string>('No plan generated yet');
+  const [isPlanning, setIsPlanning] = useState<boolean>(false);
+  const [generatedPlan, setGeneratedPlan] = useState<{
+    task: string;
+    error?: string;
+    steps: Array<{
+      step_number: number;
+      description: string;
+      target_element_id: string | null;
+      action: string;
+      bbox: number[] | null;
+    }>;
+  } | null>(null);
+
   const WS_URL = 'ws://127.0.0.1:8765/ws';
 
   const connectWebSocket = async () => {
@@ -116,6 +132,43 @@ export function ScreenCaptureTest() {
       setStatus('Differential SHA-256 detection registry reset.');
     } catch (error) {
       setStatus(`Error resetting registry: ${error}`);
+    }
+  };
+
+  const generatePlan = async () => {
+    if (!taskQuery.trim()) {
+      setPlanningStatus('Please enter a valid task query.');
+      return;
+    }
+    
+    setIsPlanning(true);
+    setPlanningStatus('Decomposing task query and serializing elements tree...');
+    setGeneratedPlan(null);
+    
+    try {
+      const response = await invoke<any>('ws_send_task_start', {
+        url: WS_URL,
+        query: taskQuery
+      });
+      
+      setIsPlanning(false);
+      
+      if (response && response.plan) {
+        const plan = response.plan;
+        if (plan.error) {
+          setPlanningStatus(`Failed: ${plan.error}`);
+        } else {
+          setGeneratedPlan(plan);
+          setPlanningStatus(`Guidance plan successfully generated! Found ${plan.steps?.length || 0} steps.`);
+        }
+      } else if (response && response.error) {
+        setPlanningStatus(`Task planning failed: ${response.error}`);
+      } else {
+        setPlanningStatus('Unexpected response format received from WebSocket.');
+      }
+    } catch (error) {
+      setIsPlanning(false);
+      setPlanningStatus(`Task planning error: ${error}`);
     }
   };
 
@@ -368,6 +421,149 @@ export function ScreenCaptureTest() {
               <span style={{ color: '#a1a1aa', fontWeight: 'bold' }}>SYSTEM:</span>
               <span style={{ color: '#38bdf8' }}>{status}</span>
             </div>
+          </div>
+
+          {/* AI Task Orchestrator & Action Planner Deck */}
+          <div style={{
+            background: 'linear-gradient(135deg, #1e1b4b 0%, #0f172a 100%)',
+            border: '1px solid #312e81',
+            borderRadius: '12px',
+            padding: '24px',
+            boxShadow: '0 8px 32px 0 rgba(0, 0, 0, 0.4)',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '15px'
+          }}>
+            <h3 style={{ fontSize: '18px', fontWeight: 600, margin: 0, color: '#c084fc', display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <span>🧠</span> AI Guidance Orchestrator & Action Planner
+            </h3>
+            
+            <div style={{ display: 'flex', gap: '10px' }}>
+              <input
+                type="text"
+                value={taskQuery}
+                onChange={(e) => setTaskQuery(e.target.value)}
+                placeholder="Enter desktop task (e.g. 'Click Connect WebSocket button', 'Open Slack'...)"
+                disabled={!wsConnected || isPlanning}
+                style={{
+                  flex: 1,
+                  background: '#020617',
+                  border: '1px solid #334155',
+                  borderRadius: '8px',
+                  color: '#f8fafc',
+                  padding: '12px 16px',
+                  fontSize: '14px',
+                  outline: 'none',
+                  opacity: wsConnected ? 1 : 0.6
+                }}
+              />
+              
+              <button
+                onClick={generatePlan}
+                disabled={!wsConnected || isPlanning}
+                style={{
+                  background: wsConnected ? 'linear-gradient(135deg, #a855f7 0%, #7c3aed 100%)' : '#334155',
+                  color: '#ffffff',
+                  border: 'none',
+                  borderRadius: '8px',
+                  padding: '0 24px',
+                  fontSize: '14px',
+                  fontWeight: 600,
+                  cursor: wsConnected && !isPlanning ? 'pointer' : 'not-allowed',
+                  transition: 'opacity 0.2s'
+                }}
+              >
+                {isPlanning ? 'Planning...' : 'Decompose & Plan'}
+              </button>
+            </div>
+            
+            <div style={{
+              fontFamily: 'monospace',
+              fontSize: '12px',
+              color: '#94a3b8',
+              background: 'rgba(15, 23, 42, 0.6)',
+              padding: '10px 14px',
+              border: '1px solid #1e293b',
+              borderRadius: '6px'
+            }}>
+              <span style={{ fontWeight: 'bold', color: '#c084fc' }}>PLANNER STATUS:</span> {planningStatus}
+            </div>
+            
+            {/* Steps Roadmap Render */}
+            {generatedPlan && (
+              <div style={{ marginTop: '10px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                <h4 style={{ fontSize: '14px', fontWeight: 600, margin: 0, color: '#cbd5e1' }}>
+                  Step-by-Step Guidance Roadmap:
+                </h4>
+                
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                  {generatedPlan.steps.map((step) => {
+                    let actionBadgeColor = '#38bdf8';
+                    let actionBg = 'rgba(56, 189, 248, 0.1)';
+                    if (step.action === 'done') {
+                      actionBadgeColor = '#34d399';
+                      actionBg = 'rgba(52, 211, 153, 0.1)';
+                    } else if (step.action === 'click') {
+                      actionBadgeColor = '#fbbf24';
+                      actionBg = 'rgba(251, 191, 36, 0.1)';
+                    }
+                    
+                    return (
+                      <div key={step.step_number} style={{
+                        background: 'rgba(30, 41, 59, 0.5)',
+                        border: '1px solid #334155',
+                        borderRadius: '8px',
+                        padding: '12px 16px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        gap: '15px'
+                      }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
+                          <span style={{
+                            width: '24px',
+                            height: '24px',
+                            borderRadius: '50%',
+                            background: '#7c3aed',
+                            color: '#ffffff',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            fontSize: '12px',
+                            fontWeight: 'bold'
+                          }}>
+                            {step.step_number}
+                          </span>
+                          
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                            <span style={{ fontSize: '13px', color: '#f1f5f9' }}>{step.description}</span>
+                            {step.target_element_id && (
+                              <span style={{ fontSize: '11px', color: '#94a3b8' }}>
+                                Target ID: <strong style={{ color: '#fbbf24' }}>{step.target_element_id}</strong>
+                                {step.bbox && ` | Coordinates: [${step.bbox.join(', ')}]`}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                        
+                        <span style={{
+                          color: actionBadgeColor,
+                          background: actionBg,
+                          border: `1px solid ${actionBadgeColor}44`,
+                          padding: '3px 8px',
+                          borderRadius: '12px',
+                          fontSize: '11px',
+                          fontWeight: 600,
+                          textTransform: 'uppercase'
+                        }}>
+                          {step.action}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Element List View */}

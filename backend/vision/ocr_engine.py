@@ -26,10 +26,9 @@ class OCREngine:
             from paddleocr import PaddleOCR
             logger.info("Initializing PaddleOCR (use_gpu=%s, det_db_thresh=%s)...", self.use_gpu, self.det_db_thresh)
             self.ocr = PaddleOCR(
-                use_angle_cls=True,
                 lang="en",
-                use_gpu=self.use_gpu,
-                det_db_thresh=self.det_db_thresh
+                device="gpu" if self.use_gpu else "cpu",
+                text_det_thresh=self.det_db_thresh
             )
             self._initialized = True
             logger.info("PaddleOCR initialized successfully.")

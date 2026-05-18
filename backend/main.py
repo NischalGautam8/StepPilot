@@ -11,8 +11,11 @@ import numpy as np
 from core.ws_manager import ws_manager, MessageType
 from vision.screen_parser import ScreenParser
 
-# Initialize ScreenParser lazily to avoid heavy model loading on startup
+# Initialize ScreenParser & TaskPlanner lazily to avoid heavy model loading on startup
 screen_parser = None
+task_planner = None
+last_parsed_elements = []
+last_screenshot_bytes = None
 
 
 # Configure logging
@@ -41,7 +44,7 @@ app.add_middleware(
 # Message handlers
 async def handle_screenshot(message: dict, client_id: str):
     """Handle screenshot messages from Rust client and run element parsing pipeline"""
-    global screen_parser
+    global screen_parser, last_parsed_elements, last_screenshot_bytes
     try:
         screenshot_data = message.get("data", "")
         width = message.get("width", 0)
@@ -72,6 +75,10 @@ async def handle_screenshot(message: dict, client_id: str):
         # Process screenshot (Run OCR + A11y and merge results)
         detected_elements = await screen_parser.parse_screen(image_np)
         
+        # Cache results for downstream LLM planning
+        last_parsed_elements = detected_elements
+        last_screenshot_bytes = image_bytes
+        
         # Log detected elements to stdout
         logger.info(f"Screenshot parsed. Found {len(detected_elements)} elements.")
         for elem in detected_elements[:10]:
@@ -94,23 +101,39 @@ async def handle_screenshot(message: dict, client_id: str):
 
 
 async def handle_task_start(message: dict, client_id: str):
-    """Handle task start messages from frontend"""
+    """Handle task start messages from frontend, running LLM planning"""
+    global task_planner, last_parsed_elements, last_screenshot_bytes
     try:
         query = message.get("query", "")
         timestamp = message.get("timestamp", 0)
         
         logger.info(f"Task started: '{query}' at {timestamp}")
         
-        # TODO: Process task with LLM (Sprint 4)
-        # For now, just acknowledge
+        # Lazy initialization of TaskPlanner
+        if task_planner is None:
+            logger.info("Initializing TaskPlanner...")
+            from task.planner import TaskPlanner
+            task_planner = TaskPlanner()
+            
+        # Generate the structured plan using the planner
+        plan = await task_planner.plan_task(
+            query=query,
+            elements=last_parsed_elements,
+            image_bytes=last_screenshot_bytes
+        )
+        
+        logger.info(f"Task plan generated successfully for query '{query}': {len(plan.get('steps', []))} steps found.")
+        
+        # Send planning result as the WebSocket response
         await ws_manager.send_message({
             "type": MessageType.ACK,
             "received": "task_start",
-            "query": query
+            "query": query,
+            "plan": plan
         }, client_id)
         
     except Exception as e:
-        logger.error(f"Error handling task start: {e}", exc_info=True)
+        logger.error(f"Error handling task start planning: {e}", exc_info=True)
         await ws_manager.send_error(f"Task start error: {str(e)}", client_id)
 
 
