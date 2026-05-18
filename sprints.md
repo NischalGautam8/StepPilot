@@ -1,3 +1,4 @@
+
 # Cursor-King: 15-Sprint Implementation Plan
 
 > **AI Desktop Guidance Assistant** — Watches your screen, understands UI, and visually guides you through tasks with arrows, highlights, and tooltips. Post-MVP: autonomous mouse/keyboard control via LLM tool calls.
@@ -41,24 +42,24 @@
 
 ---
 
-### Sprint 2: Screen Capture & WebSocket Bridge
+### Sprint 2: Screen Capture & WebSocket Bridge [DONE]
 **Goal**: Capture screenshots from Rust and deliver them to Python via WebSocket.
 **Duration**: 1 week
 
-- [ ] Implement screen capture in Rust using `scrap` crate (DXGI backend)
-- [ ] JPEG compression using `image` crate (quality=75, ~100-200KB per frame)
-- [ ] Implement differential screenshot detection (skip unchanged frames)
-- [ ] Set up FastAPI WebSocket endpoint at `/ws`
-- [ ] Implement WebSocket client in Rust (`tungstenite` crate) to connect to Python
-- [ ] Define typed JSON message protocol:
+- [x] Implement screen capture in Rust using `scrap` crate (DXGI backend)
+- [x] JPEG compression using `image` crate (quality=75, ~100-200KB per frame)
+- [x] Implement differential screenshot detection (skip unchanged frames)
+- [x] Set up FastAPI WebSocket endpoint at `/ws`
+- [x] Implement WebSocket client in Rust (`tungstenite` crate) to connect to Python
+- [x] Define typed JSON message protocol:
   - `screenshot` — base64 JPEG from Rust → Python
   - `task_start` — user query from frontend → Python
   - `task_step` — guidance step from Python → frontend
   - `cursor_pos` — cursor position from Rust → Python
   - `error` — error messages
-- [ ] Implement WebSocket connection manager in Python (`ws_manager.py`)
-- [ ] Add reconnection logic with exponential backoff
-- [ ] Verify: capture screenshot → send via WS → receive in Python → log dimensions
+- [x] Implement WebSocket connection manager in Python (`ws_manager.py`)
+- [x] Add reconnection logic with exponential backoff
+- [x] Verify: capture screenshot → send via WS → receive in Python → log dimensions
 
 **Implementation Detail**: Screenshots are captured on-demand (not continuous). Trigger on task start and after each user action.
 

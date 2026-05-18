@@ -1,2 +1,2 @@
 // StepPilot UI Components export entrypoint
-export {};
+export { ScreenCaptureTest } from './ScreenCaptureTest';
