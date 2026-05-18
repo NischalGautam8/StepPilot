@@ -5,8 +5,15 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 from PIL import Image
+import cv2
+import numpy as np
 
 from core.ws_manager import ws_manager, MessageType
+from vision.screen_parser import ScreenParser
+
+# Initialize ScreenParser lazily to avoid heavy model loading on startup
+screen_parser = None
+
 
 # Configure logging
 logging.basicConfig(
@@ -33,7 +40,8 @@ app.add_middleware(
 
 # Message handlers
 async def handle_screenshot(message: dict, client_id: str):
-    """Handle screenshot messages from Rust client"""
+    """Handle screenshot messages from Rust client and run element parsing pipeline"""
+    global screen_parser
     try:
         screenshot_data = message.get("data", "")
         width = message.get("width", 0)
@@ -46,24 +54,43 @@ async def handle_screenshot(message: dict, client_id: str):
             
         # Decode base64 JPEG
         image_bytes = base64.b64decode(screenshot_data)
-        image = Image.open(BytesIO(image_bytes))
         
+        # Load image via OpenCV for vision processing
+        file_bytes = np.frombuffer(image_bytes, dtype=np.uint8)
+        image_np = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
+        
+        if image_np is None:
+            raise ValueError("Failed to decode screenshot bytes into image buffer")
+            
         logger.info(f"Received screenshot: {width}x{height}, size: {len(image_bytes)} bytes, timestamp: {timestamp}")
-        logger.info(f"Image format: {image.format}, mode: {image.mode}, actual size: {image.size}")
         
-        # TODO: Process screenshot with OCR and element detection (Sprint 3)
-        # For now, just acknowledge receipt
+        # Lazy initialization of ScreenParser
+        if screen_parser is None:
+            logger.info("First screenshot received. Initializing ScreenParser...")
+            screen_parser = ScreenParser()
+            
+        # Process screenshot (Run OCR + A11y and merge results)
+        detected_elements = await screen_parser.parse_screen(image_np)
+        
+        # Log detected elements to stdout
+        logger.info(f"Screenshot parsed. Found {len(detected_elements)} elements.")
+        for elem in detected_elements[:10]:
+            logger.info(f" - [{elem['source'].upper()}] ID={elem['id']} Type={elem['type']} Text='{elem['text']}' BBox={elem['bbox']}")
+            
+        # Acknowledge receipt and send parsed elements back to client
         await ws_manager.send_message({
             "type": MessageType.ACK,
             "received": "screenshot",
             "width": width,
             "height": height,
-            "size_bytes": len(image_bytes)
+            "size_bytes": len(image_bytes),
+            "elements": detected_elements
         }, client_id)
         
     except Exception as e:
-        logger.error(f"Error handling screenshot: {e}", exc_info=True)
+        logger.error(f"Error handling and parsing screenshot: {e}", exc_info=True)
         await ws_manager.send_error(f"Screenshot processing error: {str(e)}", client_id)
+
 
 
 async def handle_task_start(message: dict, client_id: str):

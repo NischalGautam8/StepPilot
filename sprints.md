@@ -65,28 +65,29 @@
 
 ---
 
-### Sprint 3: OCR & Element Detection Pipeline
+### Sprint 3: OCR & Element Detection Pipeline [DONE]
 **Goal**: Extract text and detect UI elements from screenshots.
 **Duration**: 1 week
 
-- [ ] Install and configure PaddleOCR v4 in Python backend
+- [x] Install and configure PaddleOCR v4 in Python backend
   - `use_angle_cls=True`, `lang='en'`, `use_gpu=False`
   - Lower `det_db_thresh=0.3` for UI text sensitivity
-- [ ] Create `OCREngine` class returning `[{text, bbox, confidence}]`
-- [ ] Implement Windows Accessibility API reader using `pywinauto`
+- [x] Create `OCREngine` class returning `[{text, bbox, confidence}]`
+- [x] Implement Windows Accessibility API reader using `pywinauto`
   - `Desktop(backend="uia")` for active window element tree
   - Extract: control_type, name, bbox, enabled, automation_id
-- [ ] Create `ElementMerger` that combines OCR + Accessibility results
+- [x] Create `ElementMerger` that combines OCR + Accessibility results
   - Dedup overlapping bounding boxes (IoU > 0.7)
   - Prefer A11y type info, OCR text content
   - Assign unique element IDs
-- [ ] Create unified `UIElement` schema:
+- [x] Create unified `UIElement` schema:
   ```
   {id, type, text, bbox, confidence, source, enabled, automation_id}
   ```
-- [ ] Build `ScreenParser` facade that orchestrates OCR + A11y in parallel
-- [ ] Add preprocessing: resize to 1280x720 before OCR, contrast enhancement
-- [ ] Verify: screenshot → parse → log detected elements with bounding boxes
+- [x] Build `ScreenParser` facade that orchestrates OCR + A11y in parallel
+- [x] Add preprocessing: resize to 1280x720 before OCR, contrast enhancement
+- [x] Verify: screenshot → parse → log detected elements with bounding boxes
+
 
 **Implementation Detail**: OCR and A11y run concurrently via `asyncio.gather()`. A11y is primary when available; OCR fills gaps for custom-drawn UIs.
 
