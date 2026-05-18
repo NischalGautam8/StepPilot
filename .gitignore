@@ -64,3 +64,24 @@ conda-env/
 # OS Specific
 .DS_Store
 Thumbs.db
+
+# Sprint Documentation (keep only sprints.md)
+# Ignore all SPRINT documentation files except sprints.md
+SPRINT2_*.md
+SPRINT3_*.md
+SPRINT4_*.md
+SPRINT5_*.md
+SPRINT6_*.md
+SPRINT7_*.md
+SPRINT8_*.md
+SPRINT9_*.md
+SPRINT10_*.md
+SPRINT11_*.md
+SPRINT12_*.md
+SPRINT13_*.md
+SPRINT14_*.md
+SPRINT15_*.md
+CURRENT_STATUS.md
+RUNNING_STATUS.md
+test_backend_only.py
+scripts/test_sprint*.ps1
