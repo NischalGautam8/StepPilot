@@ -4,6 +4,7 @@ mod capture;
 mod cursor;
 mod overlay;
 mod sidecar;
+mod ws_client;
 
 use tauri::{
     menu::{Menu, MenuItem},
@@ -47,10 +48,14 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             greet,
             capture::capture_screen,
+            capture::capture_screen_diff,
+            capture::reset_screenshot_diff,
             cursor::get_cursor_position,
             overlay::toggle_overlay,
             sidecar::start_sidecar,
-            sidecar::stop_sidecar
+            sidecar::stop_sidecar,
+            ws_client::ws_connect,
+            ws_client::ws_send_screenshot
         ])
         .setup(|app| {
             // Register global hotkey: Ctrl + Alt + K

@@ -9,8 +9,10 @@ import {
   Command,
   Play,
   Square,
-  MessageSquare
+  MessageSquare,
+  TestTube
 } from "lucide-react";
+import { ScreenCaptureTest } from "./components";
 import "./App.css";
 
 interface Message {
@@ -21,7 +23,7 @@ interface Message {
 }
 
 function App() {
-  const [activeTab, setActiveTab] = useState<"chat" | "dashboard" | "settings">("chat");
+  const [activeTab, setActiveTab] = useState<"chat" | "dashboard" | "settings" | "sprint2test">("chat");
   const [wsStatus, setWsStatus] = useState<"connected" | "disconnected" | "connecting">("connecting");
   const [messages, setMessages] = useState<Message[]>([
     {
@@ -255,6 +257,13 @@ function App() {
               System Dashboard
             </button>
             <button
+              className={`nav-button ${activeTab === "sprint2test" ? "active" : ""}`}
+              onClick={() => setActiveTab("sprint2test")}
+            >
+              <TestTube size={18} />
+              Sprint 2 Test
+            </button>
+            <button
               className={`nav-button ${activeTab === "settings" ? "active" : ""}`}
               onClick={() => setActiveTab("settings")}
             >
@@ -459,6 +468,12 @@ function App() {
                 </select>
               </div>
             </div>
+          </section>
+        )}
+
+        {activeTab === "sprint2test" && (
+          <section className="dashboard-panel">
+            <ScreenCaptureTest />
           </section>
         )}
       </main>
