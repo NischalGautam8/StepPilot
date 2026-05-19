@@ -95,5 +95,16 @@ def apply_settings(settings: Dict[str, Any] = None) -> None:
         os.environ["OPENAI_API_KEY"] = api_key
     elif "OPENAI_API_KEY" in os.environ:
         del os.environ["OPENAI_API_KEY"]
-        
-    logger.info(f"Applied settings: LLM_PROVIDER={provider}, OPENAI_API_KEY={'***' if api_key else 'None'}")
+    
+    # Also load Gemini API key from .env if provider is gemini
+    if provider == "gemini":
+        from dotenv import load_dotenv
+        load_dotenv()
+        gemini_key = os.getenv("GEMINI_API_KEY")
+        if gemini_key:
+            os.environ["GEMINI_API_KEY"] = gemini_key
+            logger.info(f"Applied settings: LLM_PROVIDER={provider}, GEMINI_API_KEY=***")
+        else:
+            logger.warning("Gemini provider selected but GEMINI_API_KEY not found in .env")
+    else:
+        logger.info(f"Applied settings: LLM_PROVIDER={provider}, OPENAI_API_KEY={'***' if api_key else 'None'}")

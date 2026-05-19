@@ -5,6 +5,7 @@ from typing import Optional, AsyncGenerator
 from llm.llm_provider import LLMProvider
 from llm.openai_provider import OpenAIProvider
 from llm.copilot_provider import CopilotProvider
+from llm.gemini_provider import GeminiProvider
 
 logger = logging.getLogger("cursor-king-backend.llm-orchestrator")
 
@@ -19,13 +20,14 @@ class LLMOrchestrator:
     LLMOrchestrator serves as the primary system coordinator for LLM tasks.
     It reads config settings and manages dynamic fallback logic:
     If 'copilot' is requested but unavailable or errors, it transparently
-    fails over to 'openai' to ensure 100% service availability.
+    fails over to 'openai' or 'gemini' to ensure 100% service availability.
     """
     def __init__(self, provider_preference: Optional[str] = None):
         # Allow passing an explicit preference, otherwise resolve dynamically from env
         self.preference = provider_preference
         self.openai_provider = OpenAIProvider()
         self.copilot_provider = CopilotProvider()
+        self.gemini_provider = GeminiProvider()
         
         logger.info(f"LLMOrchestrator initialized. Preferred provider preference: {self.preference or 'dynamic'}")
 
@@ -35,6 +37,8 @@ class LLMOrchestrator:
         
         if prov == "copilot":
             return self.copilot_provider, "copilot"
+        elif prov == "gemini":
+            return self.gemini_provider, "gemini"
         else:
             return self.openai_provider, "openai"
 
