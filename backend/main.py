@@ -9,7 +9,11 @@ import cv2
 import numpy as np
 
 from core.ws_manager import ws_manager, MessageType
+from core.settings_manager import apply_settings
 from vision.screen_parser import ScreenParser
+
+# Apply settings from config and keyring on startup
+apply_settings()
 
 # Initialize ScreenParser & TaskPlanner lazily to avoid heavy model loading on startup
 screen_parser = None
@@ -149,10 +153,43 @@ async def handle_cursor_pos(message: dict, client_id: str):
     # TODO: Use cursor position for guidance rendering (Sprint 6)
 
 
+async def handle_get_settings(message: dict, client_id: str):
+    """Handle get_settings message from frontend and return current settings"""
+    try:
+        from core.settings_manager import load_settings
+        settings = load_settings()
+        await ws_manager.send_message({
+            "type": "settings_data",
+            "settings": settings
+        }, client_id)
+        logger.info(f"Sent settings data to client: {client_id}")
+    except Exception as e:
+        logger.error(f"Error handling get_settings: {e}", exc_info=True)
+        await ws_manager.send_error(f"Get settings error: {str(e)}", client_id)
+
+
+async def handle_save_settings(message: dict, client_id: str):
+    """Handle save_settings message from frontend and update config"""
+    try:
+        from core.settings_manager import save_settings
+        settings = message.get("settings", {})
+        save_settings(settings)
+        await ws_manager.send_message({
+            "type": "settings_saved",
+            "status": "success"
+        }, client_id)
+        logger.info(f"Saved settings updated by client: {client_id}")
+    except Exception as e:
+        logger.error(f"Error handling save_settings: {e}", exc_info=True)
+        await ws_manager.send_error(f"Save settings error: {str(e)}", client_id)
+
+
 # Register message handlers
 ws_manager.register_handler(MessageType.SCREENSHOT, handle_screenshot)
 ws_manager.register_handler(MessageType.TASK_START, handle_task_start)
 ws_manager.register_handler(MessageType.CURSOR_POS, handle_cursor_pos)
+ws_manager.register_handler("get_settings", handle_get_settings)
+ws_manager.register_handler("save_settings", handle_save_settings)
 
 
 @app.get("/health")

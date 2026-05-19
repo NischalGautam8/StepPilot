@@ -10,7 +10,13 @@ import {
   Play,
   Square,
   MessageSquare,
-  TestTube
+  TestTube,
+  Sparkles,
+  X,
+  CheckCircle,
+  AlertCircle,
+  Save,
+  History as HistoryIcon
 } from "lucide-react";
 import { ScreenCaptureTest } from "./components";
 import "./App.css";
@@ -19,6 +25,22 @@ interface Message {
   id: string;
   sender: "user" | "assistant" | "system";
   text: string;
+  timestamp: Date;
+}
+
+interface Settings {
+  llm_provider: string;
+  model_name: string;
+  show_debug_overlay: boolean;
+  auto_advance: boolean;
+  hotkey: string;
+  openai_api_key: string;
+}
+
+interface HistoryItem {
+  id: string;
+  task: string;
+  status: "completed" | "cancelled" | "failed";
   timestamp: Date;
 }
 
@@ -34,11 +56,23 @@ function App() {
     }
   ]);
   const [inputText, setInputText] = useState("");
-  const [nameInput, setNameInput] = useState("");
-  const [greetResponse, setGreetResponse] = useState("");
   const [rustLogs, setRustLogs] = useState<string[]>([]);
   const [sidecarStatus, setSidecarStatus] = useState<"idle" | "running" | "error">("idle");
   const a11yStatus = "disconnected" as "connected" | "disconnected";
+
+  // Sprint 8 States
+  const [settings, setSettings] = useState<Settings>({
+    llm_provider: "copilot",
+    model_name: "gpt-4o-mini",
+    show_debug_overlay: false,
+    auto_advance: true,
+    hotkey: "Ctrl+Alt+K",
+    openai_api_key: ""
+  });
+  const [currentPlan, setCurrentPlan] = useState<any>(null);
+  const [currentStepIndex, setCurrentStepIndex] = useState<number>(-1);
+  const [taskHistory, setTaskHistory] = useState<HistoryItem[]>([]);
+  const [saveSuccess, setSaveSuccess] = useState(false);
   
   const wsRef = useRef<WebSocket | null>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
@@ -60,13 +94,35 @@ function App() {
         setWsStatus("connected");
         setSidecarStatus("running");
         addSystemMessage("WebSocket bridge to local FastAPI backend established.");
+        
+        // Request settings on connect
+        socket?.send(JSON.stringify({ type: "get_settings" }));
       };
 
       socket.onmessage = (event) => {
         if (!active) return;
         try {
           const data = JSON.parse(event.data);
-          addAssistantMessage(`FastAPI Backend Response: ${JSON.stringify(data)}`);
+          
+          if (data.type === "settings_data") {
+            setSettings(data.settings);
+            addSystemMessage("Successfully loaded settings from backend config.");
+          } else if (data.type === "settings_saved") {
+            addSystemMessage("✓ Settings saved successfully to keyring & config file.");
+            setSaveSuccess(true);
+            setTimeout(() => setSaveSuccess(false), 3000);
+          } else if (data.type === "ack" && data.received === "task_start") {
+            const plan = data.plan;
+            if (plan && plan.steps && plan.steps.length > 0) {
+              startPlan(plan);
+            } else {
+              addAssistantMessage(`Failed to generate task plan: ${plan?.error || "Unknown error"}`);
+            }
+          } else if (data.type === "error") {
+            addAssistantMessage(`Error: ${data.message}`);
+          } else if (data.type !== "pong" && data.type !== "ping") {
+            addAssistantMessage(`Backend update: ${JSON.stringify(data)}`);
+          }
         } catch {
           addAssistantMessage(`Raw message: ${event.data}`);
         }
@@ -96,39 +152,157 @@ function App() {
     };
   }, []);
 
-  // Listen to Tauri events emitted from Rust backend
-  useEffect(() => {
-    let unlistenStart: (() => void) | null = null;
-    let unlistenStop: (() => void) | null = null;
-    let unlistenNav: (() => void) | null = null;
+  // Helpers for step progression
+  const startPlan = (plan: any) => {
+    setCurrentPlan(plan);
+    setCurrentStepIndex(0);
+    const step = plan.steps[0];
+    addSystemMessage(`Started task guidance session: "${plan.task}"`);
+    addAssistantMessage(`I've created a ${plan.steps.length}-step guide. Let's do Step 1: ${step.description}`);
+    
+    // Update target bounding box in Rust for click-tracking
+    if (step.bbox) {
+      const [x, y, w, h] = step.bbox;
+      invoke("set_active_target_bbox", {
+        x: Math.round(x),
+        y: Math.round(y),
+        w: Math.round(w),
+        h: Math.round(h)
+      }).catch((err) => console.error("Failed to set target bbox in Rust:", err));
+    } else {
+      invoke("set_active_target_bbox", { x: 0, y: 0, w: 0, h: 0 }).catch(() => {});
+    }
+    
+    import("@tauri-apps/api/event").then(({ emit }) => {
+      emit("show-guidance-hint", {
+        step_number: step.step_number,
+        total_steps: plan.steps.length,
+        description: step.description,
+        action: step.action,
+        bbox: step.bbox
+      });
+    });
+  };
 
-    const setupTauriListeners = async () => {
-      try {
-        unlistenStart = await listen("tray-start", () => {
-          addSystemMessage("System Tray command: [Start] activated");
+  const handleNextStep = () => {
+    setCurrentStepIndex((prevIndex) => {
+      if (!currentPlan || !currentPlan.steps || currentPlan.steps.length === 0) return prevIndex;
+      
+      const nextIndex = prevIndex + 1;
+      if (nextIndex >= currentPlan.steps.length) {
+        // Task completed!
+        addSystemMessage("✓ Task completed! Celebration animated in HUD.");
+        addAssistantMessage("Task completed! Let me know if there's anything else I can guide you through.");
+        
+        // Clear hint on overlay
+        import("@tauri-apps/api/event").then(({ emit }) => {
+          emit("clear-guidance-hint");
         });
-        unlistenStop = await listen("tray-stop", () => {
-          addSystemMessage("System Tray command: [Stop] activated");
-        });
-        unlistenNav = await listen("navigate", (event) => {
-          const target = event.payload as string;
-          if (target === "settings") {
-            setActiveTab("settings");
-          }
-        });
-      } catch (err) {
-        console.error("Failed to register Tauri event listeners:", err);
+        invoke("set_active_target_bbox", { x: 0, y: 0, w: 0, h: 0 }).catch(() => {});
+        
+        // Add to history
+        setTaskHistory((prev) => [
+          {
+            id: Math.random().toString(),
+            task: currentPlan.task,
+            status: "completed",
+            timestamp: new Date()
+          },
+          ...prev
+        ]);
+        
+        setCurrentPlan(null);
+        return -1;
       }
-    };
+      
+      // Send next step to overlay
+      const step = currentPlan.steps[nextIndex];
+      addSystemMessage(`Stepping to: ${step.description}`);
+      addAssistantMessage(`Step ${step.step_number} of ${currentPlan.steps.length}: ${step.description}`);
+      
+      // Update target bounding box in Rust for click-tracking
+      if (step.bbox) {
+        const [x, y, w, h] = step.bbox;
+        invoke("set_active_target_bbox", {
+          x: Math.round(x),
+          y: Math.round(y),
+          w: Math.round(w),
+          h: Math.round(h)
+        }).catch((err) => console.error("Failed to set target bbox in Rust:", err));
+      } else {
+        invoke("set_active_target_bbox", { x: 0, y: 0, w: 0, h: 0 }).catch(() => {});
+      }
+      
+      import("@tauri-apps/api/event").then(({ emit }) => {
+        emit("show-guidance-hint", {
+          step_number: step.step_number,
+          total_steps: currentPlan.steps.length,
+          description: step.description,
+          action: step.action,
+          bbox: step.bbox
+        });
+      });
+      
+      return nextIndex;
+    });
+  };
 
-    setupTauriListeners();
+  const handleCancelTask = () => {
+    if (!currentPlan) return;
+    
+    addSystemMessage("Task cancelled by user.");
+    addAssistantMessage("Task execution has been cancelled.");
+    
+    // Clear hint on overlay
+    import("@tauri-apps/api/event").then(({ emit }) => {
+      emit("clear-guidance-hint");
+    });
+    invoke("set_active_target_bbox", { x: 0, y: 0, w: 0, h: 0 }).catch(() => {});
+    
+    // Add to history
+    setTaskHistory((prev) => [
+      {
+        id: Math.random().toString(),
+        task: currentPlan.task,
+        status: "cancelled",
+        timestamp: new Date()
+      },
+      ...prev
+    ]);
+    
+    setCurrentPlan(null);
+    setCurrentStepIndex(-1);
+  };
+
+  // Listen to Tauri events emitted from Rust backend & Overlay
+  useEffect(() => {
+    const unlistenStart = listen("tray-start", () => {
+      addSystemMessage("System Tray command: [Start] activated");
+    });
+    const unlistenStop = listen("tray-stop", () => {
+      addSystemMessage("System Tray command: [Stop] activated");
+    });
+    const unlistenNav = listen("navigate", (event) => {
+      const target = event.payload as string;
+      if (target === "settings") {
+        setActiveTab("settings");
+      }
+    });
+    const unlistenAutoAdvance = listen("auto-advance-step", () => {
+      handleNextStep();
+    });
+    const unlistenRequestNextStep = listen("request-next-step", () => {
+      handleNextStep();
+    });
 
     return () => {
-      if (unlistenStart) unlistenStart();
-      if (unlistenStop) unlistenStop();
-      if (unlistenNav) unlistenNav();
+      unlistenStart.then((fn) => fn());
+      unlistenStop.then((fn) => fn());
+      unlistenNav.then((fn) => fn());
+      unlistenAutoAdvance.then((fn) => fn());
+      unlistenRequestNextStep.then((fn) => fn());
     };
-  }, []);
+  }, [currentPlan, currentStepIndex]);
 
   // Auto-scroll to the bottom of the chat list
   useEffect(() => {
@@ -150,17 +324,6 @@ function App() {
   };
 
   // UI action handlers triggering Tauri IPC Commands
-  const testGreet = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!nameInput.trim()) return;
-    try {
-      const response: string = await invoke("greet", { name: nameInput });
-      setGreetResponse(response);
-      logRustCall("greet", response);
-    } catch (err) {
-      setGreetResponse(`IPC Error: ${err}`);
-    }
-  };
 
   const triggerCapture = async () => {
     try {
@@ -213,7 +376,7 @@ function App() {
 
     // Send query to local FastAPI via websocket
     if (wsRef.current && wsStatus === "connected") {
-      wsRef.current.send(JSON.stringify({ type: "user_query", query: userMsg }));
+      wsRef.current.send(JSON.stringify({ type: "task_start", query: userMsg }));
     } else {
       setTimeout(() => {
         addAssistantMessage("I received your task. (Note: FastAPI backend websocket is currently disconnected. Start backend server using dev.ps1 script.)");
@@ -221,13 +384,40 @@ function App() {
     }
   };
 
+  const handleKeyPress = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Enter" && e.ctrlKey) {
+      e.preventDefault();
+      // Trigger send message
+      const fakeEvent = { preventDefault: () => {} } as React.FormEvent;
+      handleSendMessage(fakeEvent);
+    }
+  };
+
+  const handleSaveSettings = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (wsRef.current && wsStatus === "connected") {
+      wsRef.current.send(JSON.stringify({
+        type: "save_settings",
+        settings: settings
+      }));
+    } else {
+      addSystemMessage("WebSocket offline: Settings saved in memory only. Connect FastAPI backend to persist settings.");
+      setSaveSuccess(true);
+      setTimeout(() => setSaveSuccess(false), 3000);
+    }
+  };
+
+  const progressPercent = currentPlan && currentPlan.steps && currentPlan.steps.length > 0
+    ? Math.round(((currentStepIndex + 1) / currentPlan.steps.length) * 100)
+    : 0;
+
   return (
     <div className="app-container">
       {/* Premium Header */}
       <header className="app-header">
         <div className="logo-container">
           <span className="logo-text">👑 StepPilot</span>
-          <span className="logo-badge">Sprint 1</span>
+          <span className="logo-badge">Sprint 8</span>
         </div>
         
         <div className="status-indicator">
@@ -272,11 +462,27 @@ function App() {
             </button>
           </div>
 
+          {currentPlan && (
+            <div className="sidebar-section progress-sidebar-widget">
+              <span className="sidebar-title">Active Mission</span>
+              <div className="active-mission-card">
+                <span className="mission-name">{currentPlan.task}</span>
+                <span className="mission-step">Step {currentStepIndex + 1} of {currentPlan.steps.length}</span>
+                <div className="progress-bar-container">
+                  <div className="progress-bar-fill" style={{ width: `${progressPercent}%` }}></div>
+                </div>
+                <button className="cancel-mission-button" onClick={handleCancelTask}>
+                  <X size={12} /> Cancel Task
+                </button>
+              </div>
+            </div>
+          )}
+
           <div className="sidebar-section" style={{ marginTop: "auto" }}>
             <span className="sidebar-title">Global Hotkeys</span>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: "13px" }}>
               <span style={{ color: "var(--text-secondary)" }}>Toggle HUD</span>
-              <kbd className="hotkey-badge">Ctrl+Alt+K</kbd>
+              <kbd className="hotkey-badge">{settings.hotkey}</kbd>
             </div>
           </div>
         </aside>
@@ -284,6 +490,37 @@ function App() {
         {/* Dynamic Content Pane */}
         {activeTab === "chat" && (
           <section className="app-chat-pane">
+            {currentPlan && (
+              <div className="task-progress-hud">
+                <div className="hud-row">
+                  <div className="hud-info">
+                    <Sparkles className="hud-icon animate-pulse" size={16} />
+                    <span className="hud-task-title">Guidance Active: {currentPlan.task}</span>
+                  </div>
+                  <div className="hud-stats">
+                    <span className="hud-step-badge">Step {currentStepIndex + 1} of {currentPlan.steps.length}</span>
+                    <span className="hud-percentage">{progressPercent}%</span>
+                  </div>
+                </div>
+                <div className="hud-progress-track">
+                  <div className="hud-progress-bar" style={{ width: `${progressPercent}%` }}></div>
+                </div>
+                <div className="hud-step-instruction">
+                  <strong>Instruction:</strong> {currentPlan.steps[currentStepIndex]?.description}
+                </div>
+                <div className="hud-actions">
+                  <button className="hud-cancel-button" onClick={handleCancelTask}>
+                    <X size={14} /> Cancel Mission
+                  </button>
+                  {!settings.auto_advance && (
+                    <button className="hud-next-button" onClick={handleNextStep}>
+                      Next Step →
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
+
             <div className="chat-messages">
               {messages.map((msg) => (
                 <div key={msg.id} className={`message-bubble ${msg.sender}`}>
@@ -298,9 +535,10 @@ function App() {
                 <input
                   type="text"
                   className="chat-input"
-                  placeholder="Ask me to guide you through a task (e.g. 'Open Notepad')..."
+                  placeholder="Ask me to guide you through a task (e.g. 'Open Notepad')... (Ctrl+Enter to send)"
                   value={inputText}
                   onChange={(e) => setInputText(e.target.value)}
+                  onKeyDown={handleKeyPress}
                 />
                 <button type="submit" className="send-button">
                   <Send size={16} />
@@ -344,29 +582,64 @@ function App() {
               </div>
             </div>
 
-            {/* Diagnostic Control Actions */}
-            <div className="stat-card" style={{ gap: "16px" }}>
-              <span className="sidebar-title" style={{ paddingBottom: "4px", borderBottom: "1px solid var(--border-color)" }}>
-                Diagnostic IPC Controls (Rust &lt;-&gt; React)
-              </span>
-              
-              <div style={{ display: "flex", gap: "12px", flexWrap: "wrap" }}>
-                <button className="nav-button active" onClick={triggerCapture}>
-                  <Tv size={16} style={{ marginRight: "4px" }} />
-                  Screen Capture
-                </button>
-                <button className="nav-button active" onClick={triggerCursorPos}>
-                  <Command size={16} style={{ marginRight: "4px" }} />
-                  Query Cursor Pos
-                </button>
-                <button className="nav-button active" onClick={() => toggleSidecar("start")}>
-                  <Play size={16} style={{ marginRight: "4px" }} />
-                  Start Sidecar
-                </button>
-                <button className="nav-button active" onClick={() => toggleSidecar("stop")}>
-                  <Square size={16} style={{ marginRight: "4px" }} />
-                  Stop Sidecar
-                </button>
+            <div className="dashboard-split-grid">
+              {/* Diagnostic Control Actions */}
+              <div className="stat-card" style={{ gap: "16px", flex: 1 }}>
+                <span className="sidebar-title" style={{ paddingBottom: "4px", borderBottom: "1px solid var(--border-color)" }}>
+                  Diagnostic IPC Controls (Rust &lt;-&gt; React)
+                </span>
+                
+                <div style={{ display: "flex", gap: "12px", flexWrap: "wrap" }}>
+                  <button className="nav-button active" onClick={triggerCapture}>
+                    <Tv size={16} style={{ marginRight: "4px" }} />
+                    Screen Capture
+                  </button>
+                  <button className="nav-button active" onClick={triggerCursorPos}>
+                    <Command size={16} style={{ marginRight: "4px" }} />
+                    Query Cursor Pos
+                  </button>
+                  <button className="nav-button active" onClick={() => toggleSidecar("start")}>
+                    <Play size={16} style={{ marginRight: "4px" }} />
+                    Start Sidecar
+                  </button>
+                  <button className="nav-button active" onClick={() => toggleSidecar("stop")}>
+                    <Square size={16} style={{ marginRight: "4px" }} />
+                    Stop Sidecar
+                  </button>
+                </div>
+              </div>
+
+              {/* Task History Panel */}
+              <div className="stat-card task-history-card" style={{ gap: "12px", flex: 1 }}>
+                <span className="sidebar-title" style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                  <HistoryIcon size={14} /> Task Session History
+                </span>
+                <div className="history-list">
+                  {taskHistory.length === 0 ? (
+                    <span className="no-history-text">No tasks executed in this session.</span>
+                  ) : (
+                    taskHistory.map((item) => (
+                      <div key={item.id} className={`history-item ${item.status}`}>
+                        <div className="history-icon">
+                          {item.status === "completed" ? (
+                            <CheckCircle size={14} color="#10b981" />
+                          ) : item.status === "cancelled" ? (
+                            <AlertCircle size={14} color="#f59e0b" />
+                          ) : (
+                            <AlertCircle size={14} color="#ef4444" />
+                          )}
+                        </div>
+                        <div className="history-details">
+                          <span className="history-task">{item.task}</span>
+                          <span className="history-time">{item.timestamp.toLocaleTimeString()}</span>
+                        </div>
+                        <span className={`history-status-badge ${item.status}`}>
+                          {item.status}
+                        </span>
+                      </div>
+                    ))
+                  )}
+                </div>
               </div>
             </div>
 
@@ -400,73 +673,125 @@ function App() {
               <p className="dashboard-subtitle">Configure LLM providers, model bindings, and hotkeys.</p>
             </div>
 
-            <div className="stat-card" style={{ gap: "20px" }}>
-              <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
-                <label className="sidebar-title">IPC Greeting Test</label>
-                <form onSubmit={testGreet} style={{ display: "flex", gap: "12px" }}>
-                  <input
-                    type="text"
-                    style={{
-                      flex: 1,
-                      background: "rgba(255, 255, 255, 0.03)",
-                      border: "1px solid var(--border-color)",
-                      borderRadius: "8px",
-                      color: "var(--text-primary)",
+            <div className="settings-grid">
+              {/* Interactive Settings Form */}
+              <form onSubmit={handleSaveSettings} className="settings-form-container">
+                <div className="settings-form-card">
+                  <span className="sidebar-title card-section-title">Core Configurations</span>
+                  
+                  {saveSuccess && (
+                    <div style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "8px",
                       padding: "10px 14px",
-                      outline: "none"
-                    }}
-                    placeholder="Enter name to greet..."
-                    value={nameInput}
-                    onChange={(e) => setNameInput(e.target.value)}
-                  />
-                  <button type="submit" className="nav-button active" style={{ height: "40px" }}>
-                    Invoke IPC Greet
-                  </button>
-                </form>
-                {greetResponse && (
-                  <div style={{
-                    marginTop: "8px",
-                    padding: "8px 12px",
-                    background: "var(--accent-primary-glow)",
-                    border: "1px solid rgba(16, 185, 129, 0.2)",
-                    borderRadius: "6px",
-                    fontSize: "13px",
-                    color: "var(--accent-primary)"
-                  }}>
-                    {greetResponse}
+                      background: "rgba(16, 185, 129, 0.1)",
+                      border: "1px solid rgba(16, 185, 129, 0.3)",
+                      borderRadius: "8px",
+                      color: "#34d399",
+                      fontSize: "13px",
+                      fontWeight: "600",
+                      animation: "slideUp 0.25s ease-out",
+                      marginTop: "4px"
+                    }}>
+                      <CheckCircle size={16} /> Configuration saved successfully!
+                    </div>
+                  )}
+                  
+                  <div className="settings-field">
+                    <label className="field-label">LLM Gateway Provider</label>
+                    <select
+                      className="settings-select"
+                      value={settings.llm_provider}
+                      onChange={(e) => setSettings({ ...settings, llm_provider: e.target.value })}
+                    >
+                      <option value="copilot">GitHub Copilot SDK (Primary)</option>
+                      <option value="openai">OpenAI API (Fallback)</option>
+                    </select>
                   </div>
-                )}
-              </div>
 
-              <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
-                <span className="sidebar-title">LLM Gateway Provider</span>
-                <select style={{
-                  background: "rgba(255, 255, 255, 0.03)",
-                  border: "1px solid var(--border-color)",
-                  borderRadius: "8px",
-                  color: "var(--text-primary)",
-                  padding: "10px",
-                  fontFamily: "inherit"
-                }} disabled>
-                  <option>GitHub Copilot SDK (Primary)</option>
-                  <option>OpenAI API (Fallback)</option>
-                </select>
-              </div>
+                  <div className="settings-field">
+                    <label className="field-label">Vision Model Selection</label>
+                    <select
+                      className="settings-select"
+                      value={settings.model_name}
+                      onChange={(e) => setSettings({ ...settings, model_name: e.target.value })}
+                    >
+                      <optgroup label="Flagship Frontier Models">
+                        <option value="gpt-5.5">gpt-5.5 (Premier Frontier, Complex Reasoning)</option>
+                        <option value="gpt-5.4">gpt-5.4 (Flagship Professional, Reasoning & Tool Use)</option>
+                        <option value="gpt-5.2">gpt-5.2 (General Instructions & Coding)</option>
+                        <option value="gpt-5.1">gpt-5.1 (Coding & Agentic, Configurable Reasoning)</option>
+                        <option value="gpt-4o">gpt-4o (Legacy Vision Intelligent)</option>
+                      </optgroup>
+                      <optgroup label="Cost-Efficient & Mini Models">
+                        <option value="gpt-5.4-mini">gpt-5.4-mini (Strongest Mini for Subagents)</option>
+                        <option value="gpt-4o-mini">gpt-4o-mini (Fast, Multimodal Everyday)</option>
+                        <option value="gpt-5-mini">gpt-5-mini (Lightweight, Responsive Coding)</option>
+                        <option value="gpt-4.1-mini">gpt-4.1-mini (Specialized Instruction Follower)</option>
+                        <option value="gpt-4.1-nano">gpt-4.1-nano (Specialized High-Volume Batch)</option>
+                        <option value="gpt-5-nano">gpt-5-nano (Ultra-Efficient Scaled Workflows)</option>
+                      </optgroup>
+                    </select>
+                  </div>
 
-              <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
-                <span className="sidebar-title">Vision Model Selection</span>
-                <select style={{
-                  background: "rgba(255, 255, 255, 0.03)",
-                  border: "1px solid var(--border-color)",
-                  borderRadius: "8px",
-                  color: "var(--text-primary)",
-                  padding: "10px",
-                  fontFamily: "inherit"
-                }} disabled>
-                  <option>Local OCR Pipeline + Windows UIA</option>
-                  <option>GPT-4o Vision Integration</option>
-                </select>
-              </div>
+                  <div className="settings-field">
+                    <label className="field-label">OpenAI API Key</label>
+                    <input
+                      type="password"
+                      className="settings-input"
+                      placeholder={settings.openai_api_key ? "••••••••••••••••••••••••" : "Enter OpenAI API Key..."}
+                      value={settings.openai_api_key}
+                      onChange={(e) => setSettings({ ...settings, openai_api_key: e.target.value })}
+                    />
+                    <small className="field-help">API key is saved securely using the Windows Credential Manager.</small>
+                  </div>
+
+                  <div className="settings-field">
+                    <label className="field-label">Global HUD Hotkey</label>
+                    <input
+                      type="text"
+                      className="settings-input"
+                      value={settings.hotkey}
+                      onChange={(e) => setSettings({ ...settings, hotkey: e.target.value })}
+                    />
+                  </div>
+
+                  <div className="settings-checkbox-group">
+                    <label className="checkbox-container">
+                      <input
+                        type="checkbox"
+                        checked={settings.show_debug_overlay}
+                        onChange={(e) => setSettings({ ...settings, show_debug_overlay: e.target.checked })}
+                      />
+                      <span className="checkbox-custom"></span>
+                      <div className="checkbox-text">
+                        <span className="checkbox-title">Enable Developer Debug Overlay</span>
+                        <span className="checkbox-desc">Renders all detected elements, source IDs, and OCR bounding boxes.</span>
+                      </div>
+                    </label>
+
+                    <label className="checkbox-container">
+                      <input
+                        type="checkbox"
+                        checked={settings.auto_advance}
+                        onChange={(e) => setSettings({ ...settings, auto_advance: e.target.checked })}
+                      />
+                      <span className="checkbox-custom"></span>
+                      <div className="checkbox-text">
+                        <span className="checkbox-title">Auto-Advance Steps on Target Click</span>
+                        <span className="checkbox-desc">Automatically steps forward when click tracker detects a click in target bounding box.</span>
+                      </div>
+                    </label>
+                  </div>
+
+                  <button type="submit" className="save-settings-button">
+                    <Save size={16} /> Save Configuration
+                  </button>
+                </div>
+              </form>
+
+              {/* Settings Card Ends */}
             </div>
           </section>
         )}

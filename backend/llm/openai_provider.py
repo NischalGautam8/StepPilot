@@ -22,11 +22,11 @@ class OpenAIProvider(LLMProvider):
         self.client = AsyncOpenAI(api_key=self.api_key) if self.api_key else None
 
     def _ensure_client(self):
-        if not self.client:
-            # Re-read environment in case it was set after instantiation
-            self.api_key = os.getenv("OPENAI_API_KEY")
-            if not self.api_key:
-                raise ValueError("OpenAI API key is missing. Please set OPENAI_API_KEY in your environment.")
+        env_key = os.getenv("OPENAI_API_KEY")
+        if not env_key:
+            raise ValueError("OpenAI API key is missing. Please set OPENAI_API_KEY in your environment.")
+        if not self.client or env_key != self.api_key:
+            self.api_key = env_key
             self.client = AsyncOpenAI(api_key=self.api_key)
 
     async def complete(

@@ -121,7 +121,7 @@
 
 ## Phase 2: Visual Guidance (Sprints 5–7)
 
-### Sprint 5: Overlay Window & Basic Rendering
+### Sprint 5: Overlay Window & Basic Rendering [DONE]
 **Goal**: Create the transparent click-through overlay and render basic shapes.
 **Duration**: 1 week
 
@@ -143,17 +143,17 @@
 
 ---
 
-### Sprint 6: Animated Arrow & Guidance Flow
+### Sprint 6: Animated Arrow & Guidance Flow [DONE]
 **Goal**: Implement the signature Bézier arrow animation and wire up the full guidance loop.
 **Duration**: 1 week
 
-- [ ] Build `GuidanceArrow` SVG component with cubic Bézier path
+- [x] Build `GuidanceArrow` SVG component with cubic Bézier path
   - `M cursor_x cursor_y Q midpoint target_x target_y`
   - CSS `stroke-dasharray` + `stroke-dashoffset` animation for "drawing" effect
   - Arrowhead marker via SVG `<marker>` + `<polygon>`
   - Green glow effect via `filter: drop-shadow`
-- [ ] Add arrow from current cursor position to target element
-- [ ] Track real-time cursor position from Rust → frontend (throttled to 30fps)
+- [x] Add arrow from current cursor position to target element
+- [x] Track real-time cursor position from Rust → frontend (throttled to 30fps)
 - [x] Create `GuidanceRenderer` component that combines:
   - BoundingBox (around target element)
   - Tooltip (instruction text near target)
@@ -161,29 +161,29 @@
 - [x] Implement step transition animations (fade out old, fade in new)
 - [x] Wire full loop: user types task → LLM plans → overlay shows Step 1 guidance
 - [x] Add step counter badge: "Step 1 of 5"
-- [ ] Verify: complete task "open Notepad" with guided arrows
+- [x] Verify: complete task "open Notepad" with guided arrows
 
 **Implementation Detail**: Cursor position from `GetCursorPos` Win32 API via Rust, sent as `cursor_pos` WS message. Arrow updates smoothly using `requestAnimationFrame`.
 
 ---
 
-### Sprint 7: Step Verification & Multi-Step Execution
+### Sprint 7: Step Verification & Multi-Step Execution [DONE]
 **Goal**: Detect when user completes a step and automatically advance to the next.
 **Duration**: 1 week
 
-- [ ] Implement step verification in Python:
+- [x] Implement step verification in Python:
   - After user clicks/types, capture new screenshot
   - Re-run OCR + A11y on new state
   - Compare element states: did target change? Did new elements appear?
-- [ ] Create `TaskEngine` state machine: IDLE → PLANNING → GUIDING → VERIFYING → COMPLETE
+- [x] Create `TaskEngine` state machine: IDLE → PLANNING → GUIDING → VERIFYING → COMPLETE
 - [x] Implement automatic re-capture trigger:
   - Listen for mouse click events (from Rust cursor tracker)
-- [ ] Debounce: wait 500ms after last event before re-capture
-- [ ] Implement retry logic: max 3 retries per step, then re-plan
+- [x] Debounce: wait 500ms after last event before re-capture
+- [x] Implement retry logic: max 3 retries per step, then re-plan
 - [x] Add "Did this work?" confirmation button (temporarily disable click-through)
-- [ ] Implement re-planning: if verification fails 3x, ask LLM to re-analyze
-- [ ] Add task completion celebration: ✓ animation + "Task complete!" overlay
-- [ ] Verify: complete a 3+ step task end-to-end (e.g., "rename a file on desktop")
+- [x] Implement re-planning: if verification fails 3x, ask LLM to re-analyze
+- [x] Add task completion celebration: ✓ animation + "Task complete!" overlay
+- [x] Verify: complete a 3+ step task end-to-end (e.g., "rename a file on desktop")
 
 **Implementation Detail**: Verification uses element diffing — compare element registry before and after action. If target element disappeared or state changed, step is considered complete.
 
@@ -191,31 +191,31 @@
 
 ## Phase 3: Polish & Intelligence (Sprints 8–10)
 
-### Sprint 8: Main Window UI & Settings
+### Sprint 8: Main Window UI & Settings [DONE]
 **Goal**: Build a polished chat-like interface and settings panel.
 **Duration**: 1 week
 
-- [ ] Design and implement main window UI:
+- [x] Design and implement main window UI:
   - Dark theme with glassmorphism effects
   - Chat-style message list (user queries + assistant responses)
   - Text input with "Send" button and Ctrl+Enter shortcut
   - Task progress indicator (step N of M)
   - Cancel task button
-- [ ] Build Settings panel:
+- [x] Build Settings panel:
   - LLM Provider selector (Copilot SDK / OpenAI)
   - API key input (stored securely via `keyring` Python lib)
   - Model selector (gpt-4o, gpt-4o-mini)
   - Toggle: show debug overlay (all detected elements)
   - Toggle: auto-advance steps vs manual confirmation
   - Hotkey customization
-- [ ] Implement CSS design system:
+- [x] Implement CSS design system:
   - Color palette (dark mode: slate/zinc base, green accent)
   - Typography (Inter font from Google Fonts)
   - Spacing scale, border-radius tokens
   - Transition/animation tokens
-- [ ] Add connection status indicator (green/red dot)
-- [ ] Add task history list (in-memory, current session only)
-- [ ] Verify: full UI flow from opening app to completing a task
+- [x] Add connection status indicator (green/red dot)
+- [x] Add task history list (in-memory, current session only)
+- [x] Verify: full UI flow from opening app to completing a task
 
 **Implementation Detail**: Settings stored as JSON at `~/.cursor-king/config.json`. Secrets (API keys) stored via Python `keyring` library using Windows Credential Manager.
 
