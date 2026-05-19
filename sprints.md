@@ -248,30 +248,30 @@
 
 ---
 
-### Sprint 10: Error Handling & Robustness
+### Sprint 10: Error Handling & Robustness [DONE]
 **Goal**: Handle edge cases gracefully and add comprehensive error recovery.
 **Duration**: 1 week
 
-- [ ] Implement WebSocket reconnection with health checks (ping every 10s)
-- [ ] Handle Python sidecar crash: detect exit, restart, re-establish WS
-- [ ] Handle window focus changes during guidance:
+- [x] Implement WebSocket reconnection with health checks (ping every 10s)
+- [x] Handle Python sidecar crash: detect exit, restart, re-establish WS
+- [x] Handle window focus changes during guidance:
   - Detect active window title change
   - Pause guidance, show "Window changed" overlay
   - Option to re-analyze new window or return to original
-- [ ] Handle LLM API failures:
+- [x] Handle LLM API failures:
   - Timeout after 15s
   - Retry with exponential backoff (3 attempts)
   - Show user-friendly error message
   - Fallback: Copilot → OpenAI if primary fails
-- [ ] Handle OCR/A11y failures:
+- [x] Handle OCR/A11y failures:
   - Graceful degradation (OCR-only if A11y unavailable)
   - Show "Unable to detect elements" with retry button
-- [ ] Add structured logging with `structlog`:
+- [x] Add structured logging with `structlog`:
   - Log every step transition, LLM call (tokens, latency), errors
   - Log file at `~/.cursor-king/logs/cursor-king.log`
   - Log rotation (max 10MB, keep 3 files)
-- [ ] Implement input validation for all WS messages
-- [ ] Verify: simulate each failure mode, confirm graceful recovery
+- [x] Implement input validation for all WS messages
+- [x] Verify: simulate each failure mode, confirm graceful recovery
 
 **Implementation Detail**: All errors surface as toast notifications in the main window. Debug details go to log file only.
 
@@ -279,22 +279,22 @@
 
 ## Phase 4: Enhanced Vision (Sprints 11–12)
 
-### Sprint 11: OmniParser Integration
+### Sprint 11: OmniParser Integration [DONE]
 **Goal**: Add icon/button detection beyond text OCR using Microsoft's OmniParser.
 **Duration**: 1 week
 
-- [ ] Download OmniParser V2 models (YOLOv8 icon_detect + Florence-2 icon_caption)
-- [ ] Create `UIDetector` class wrapping OmniParser inference
-- [ ] Integrate into `ScreenParser` pipeline alongside OCR + A11y
-- [ ] Update `ElementMerger` to handle three sources:
+- [x] Download OmniParser V2 models (YOLOv8 icon_detect + Florence-2 icon_caption)
+- [x] Create `UIDetector` class wrapping OmniParser inference
+- [x] Integrate into `ScreenParser` pipeline alongside OCR + A11y
+- [x] Update `ElementMerger` to handle three sources:
   - OCR text regions
   - A11y control tree
   - OmniParser icon/button bounding boxes with captions
-- [ ] Implement lazy loading: only load OmniParser models when first needed (~2GB RAM)
-- [ ] Add GPU toggle: `use_gpu=True` in config enables CUDA for OmniParser
-- [ ] Test detection quality on common apps: Chrome, File Explorer, WhatsApp Desktop
-- [ ] Benchmark: measure latency increase from adding OmniParser
-- [ ] Verify: detect non-text icons (hamburger menu, close button, settings gear)
+- [x] Implement lazy loading: only load OmniParser models when first needed (~2GB RAM)
+- [x] Add GPU toggle: `use_gpu=True` in config enables CUDA for OmniParser
+- [x] Test detection quality on common apps: Chrome, File Explorer, WhatsApp Desktop
+- [x] Benchmark: measure latency increase from adding OmniParser
+- [x] Verify: detect non-text icons (hamburger menu, close button, settings gear)
 
 **Implementation Detail**: OmniParser is optional — disabled by default. Users opt-in via settings. Adds ~300ms on CPU, ~100ms on GPU.
 

@@ -8,6 +8,10 @@ from PIL import Image
 import cv2
 import numpy as np
 
+# Initialize structured logging first
+from core.logger import setup_logging, get_logger, log_error, log_websocket_event
+logger = setup_logging(log_level="INFO")
+
 from core.ws_manager import ws_manager, MessageType
 from core.settings_manager import apply_settings
 from vision.screen_parser import ScreenParser
@@ -20,14 +24,6 @@ screen_parser = None
 task_planner = None
 last_parsed_elements = []
 last_screenshot_bytes = None
-
-
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
-)
-logger = logging.getLogger("cursor-king-backend")
 
 app = FastAPI(
     title="StepPilot (Cursor-King) Backend",
