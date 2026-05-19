@@ -15,15 +15,16 @@ class LLMOrchestrator:
     fails over to 'openai' to ensure 100% service availability.
     """
     def __init__(self, provider_preference: Optional[str] = None):
-        # Read from environment, default to 'copilot'
-        self.preference = provider_preference or os.getenv("LLM_PROVIDER", "copilot").lower()
+        # Allow passing an explicit preference, otherwise resolve dynamically from env
+        self.preference = provider_preference
         self.openai_provider = OpenAIProvider()
         self.copilot_provider = CopilotProvider()
         
-        logger.info(f"LLMOrchestrator initialized. Preferred provider: {self.preference}")
+        logger.info(f"LLMOrchestrator initialized. Preferred provider preference: {self.preference or 'dynamic'}")
 
     def _get_provider(self, force_provider: Optional[str] = None) -> tuple[LLMProvider, str]:
-        prov = force_provider or self.preference
+        prov = force_provider or self.preference or os.getenv("LLM_PROVIDER", "copilot")
+        prov = prov.lower()
         
         if prov == "copilot":
             return self.copilot_provider, "copilot"
