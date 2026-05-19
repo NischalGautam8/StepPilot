@@ -185,9 +185,24 @@ function App() {
   };
 
   const handleNextStep = () => {
+    if (!currentPlan || !currentPlan.steps || currentPlan.steps.length === 0) return;
+
+    // Notify backend that the previous step has completed successfully
+    if (currentStepIndex >= 0 && currentStepIndex < currentPlan.steps.length) {
+      const completedStep = currentPlan.steps[currentStepIndex];
+      if (wsRef.current && wsStatus === "connected") {
+        wsRef.current.send(JSON.stringify({
+          type: "step_result",
+          step_number: completedStep.step_number,
+          description: completedStep.description,
+          action: completedStep.action,
+          status: "success",
+          details: "Completed by user progression"
+        }));
+      }
+    }
+
     setCurrentStepIndex((prevIndex) => {
-      if (!currentPlan || !currentPlan.steps || currentPlan.steps.length === 0) return prevIndex;
-      
       const nextIndex = prevIndex + 1;
       if (nextIndex >= currentPlan.steps.length) {
         // Task completed!
@@ -249,6 +264,21 @@ function App() {
 
   const handleCancelTask = () => {
     if (!currentPlan) return;
+
+    // Notify backend that the active step was cancelled
+    if (currentStepIndex >= 0 && currentStepIndex < currentPlan.steps.length) {
+      const activeStep = currentPlan.steps[currentStepIndex];
+      if (wsRef.current && wsStatus === "connected") {
+        wsRef.current.send(JSON.stringify({
+          type: "step_result",
+          step_number: activeStep.step_number,
+          description: activeStep.description,
+          action: activeStep.action,
+          status: "cancelled",
+          details: "Cancelled by user button"
+        }));
+      }
+    }
     
     addSystemMessage("Task cancelled by user.");
     addAssistantMessage("Task execution has been cancelled.");

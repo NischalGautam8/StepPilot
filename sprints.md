@@ -221,28 +221,28 @@
 
 ---
 
-### Sprint 9: Context Management & Smart Prompting
+### [DONE] Sprint 9: Context Management & Smart Prompting
 **Goal**: Minimize token usage and improve LLM accuracy with smart context.
 **Duration**: 1 week
 
-- [ ] Implement `ContextManager` class:
-  - Sliding window: keep last 3 step results in full
-  - Compress older steps into summary: "Steps 1-4: opened WhatsApp, found group"
-  - Track active window title for context switching detection
-- [ ] Implement smart vision toggle:
-  - Text-only mode when OCR confidence > 0.85 and elements > 5
-  - Vision mode (send screenshot) when confidence low or elements sparse
-  - Always vision mode on first analysis of a new window
-- [ ] Add screenshot preprocessing:
-  - Crop to active window bounds (skip taskbar, other windows)
-  - Resize cropped region to max 1280x720
-  - Auto-contrast enhancement for dark themes
-- [ ] Implement element registry caching:
-  - Cache parsed elements with TTL (invalidate after 10s or window change)
-  - Send only delta (changed elements) to LLM when possible
-- [ ] Add prompt templates with variable substitution
-- [ ] Implement privacy filter: redact elements containing "password", "secret", etc.
-- [ ] Verify: run 5 different tasks, measure average token usage per task
+- [x] Implement `ContextManager` class:
+  - [x] Sliding window: keep last 3 step results in full
+  - [x] Compress older steps into summary: "Steps 1-4: opened WhatsApp, found group"
+  - [x] Track active window title for context switching detection
+- [x] Implement smart vision toggle:
+  - [x] Text-only mode when OCR confidence > 0.85 and elements > 5
+  - [x] Vision mode (send screenshot) when confidence low or elements sparse
+  - [x] Always vision mode on first analysis of a new window
+- [x] Add screenshot preprocessing:
+  - [x] Crop to active window bounds (skip taskbar, other windows)
+  - [x] Resize cropped region to max 1280x720
+  - [x] Auto-contrast enhancement for dark themes
+- [x] Implement element registry caching:
+  - [x] Cache parsed elements with TTL (invalidate after 10s or window change)
+  - [x] Send only delta (changed elements) to LLM when possible
+- [x] Add prompt templates with variable substitution
+- [x] Implement privacy filter: redact elements containing "password", "secret", etc.
+- [x] Verify: run 5 different tasks, measure average token usage per task
 
 **Implementation Detail**: Target <2,000 tokens per LLM call average. Vision calls should be <20% of total calls.
 
@@ -300,7 +300,7 @@
 
 ---
 
-### Sprint 12: Visual Debug Mode & Detection Tuning
+### Sprint 12: Visual Debug Mode & Detection Tuning [NOT NEEDED RIGHT NOW]
 **Goal**: Build developer tools for visualizing and tuning element detection.
 **Duration**: 1 week
 

@@ -76,12 +76,17 @@ async def handle_screenshot(message: dict, client_id: str):
             logger.info("First screenshot received. Initializing ScreenParser...")
             screen_parser = ScreenParser()
             
-        # Process screenshot (Run OCR + A11y and merge results)
-        detected_elements = await screen_parser.parse_screen(image_np)
+        # Process screenshot (Run OCR + A11y and merge results with Sprint 9 Preprocessing)
+        preprocessed_np, crop_bounds = screen_parser.preprocess_image(image_np)
+        
+        # Convert preprocessed_np to JPEG bytes for downstream LLM vision consumption
+        _, encoded_img = cv2.imencode(".jpg", preprocessed_np)
+        last_screenshot_bytes = encoded_img.tobytes()
+        
+        detected_elements = await screen_parser.parse_screen(preprocessed_np, crop_bounds)
         
         # Cache results for downstream LLM planning
         last_parsed_elements = detected_elements
-        last_screenshot_bytes = image_bytes
         
         # Log detected elements to stdout
         logger.info(f"Screenshot parsed. Found {len(detected_elements)} elements.")
@@ -118,6 +123,8 @@ async def handle_task_start(message: dict, client_id: str):
             logger.info("Initializing TaskPlanner...")
             from task.planner import TaskPlanner
             task_planner = TaskPlanner()
+        else:
+            task_planner.context_manager.clear()
             
         # Generate the structured plan using the planner
         plan = await task_planner.plan_task(
@@ -184,12 +191,39 @@ async def handle_save_settings(message: dict, client_id: str):
         await ws_manager.send_error(f"Save settings error: {str(e)}", client_id)
 
 
+async def handle_step_result(message: dict, client_id: str):
+    """Handle step execution updates from client frontend"""
+    global task_planner
+    try:
+        if task_planner is None:
+            from task.planner import TaskPlanner
+            task_planner = TaskPlanner()
+            
+        step_number = message.get("step_number", 0)
+        description = message.get("description", "")
+        action = message.get("action", "")
+        status = message.get("status", "")
+        details = message.get("details", "")
+        
+        task_planner.context_manager.add_step_result(
+            step_number=step_number,
+            description=description,
+            action=action,
+            status=status,
+            details=details
+        )
+        logger.info(f"Registered step result: Step {step_number} ({action}) -> {status}")
+    except Exception as e:
+        logger.error(f"Error handling step_result: {e}", exc_info=True)
+
+
 # Register message handlers
 ws_manager.register_handler(MessageType.SCREENSHOT, handle_screenshot)
 ws_manager.register_handler(MessageType.TASK_START, handle_task_start)
 ws_manager.register_handler(MessageType.CURSOR_POS, handle_cursor_pos)
 ws_manager.register_handler("get_settings", handle_get_settings)
 ws_manager.register_handler("save_settings", handle_save_settings)
+ws_manager.register_handler("step_result", handle_step_result)
 
 
 @app.get("/health")
