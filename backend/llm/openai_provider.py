@@ -14,20 +14,23 @@ class OpenAIProvider(LLMProvider):
     Uses 'gpt-4o' for advanced multimodal visual processing.
     """
     def __init__(self, api_key: Optional[str] = None):
-        # Dynamically fetch API key from environment if not explicitly passed
+        # Dynamically fetch API key and base URL from environment if not explicitly passed
         self.api_key = api_key or os.getenv("OPENAI_API_KEY")
+        self.base_url = os.getenv("OPENAI_BASE_URL")
         if not self.api_key:
             logger.warning("No OPENAI_API_KEY found. OpenAIProvider calls will fail until configured.")
         
-        self.client = AsyncOpenAI(api_key=self.api_key) if self.api_key else None
+        self.client = AsyncOpenAI(api_key=self.api_key, base_url=self.base_url) if self.api_key else None
 
     def _ensure_client(self):
         env_key = os.getenv("OPENAI_API_KEY")
+        base_url = os.getenv("OPENAI_BASE_URL")
         if not env_key:
             raise ValueError("OpenAI API key is missing. Please set OPENAI_API_KEY in your environment.")
-        if not self.client or env_key != self.api_key:
+        if not self.client or env_key != self.api_key or base_url != getattr(self, "base_url", None):
             self.api_key = env_key
-            self.client = AsyncOpenAI(api_key=self.api_key)
+            self.base_url = base_url
+            self.client = AsyncOpenAI(api_key=self.api_key, base_url=self.base_url)
 
     async def complete(
         self, 
@@ -49,7 +52,7 @@ class OpenAIProvider(LLMProvider):
                 model=model_name,
                 messages=messages,
                 temperature=temperature,
-                response_format={"type": "json_object"} if json_mode else None
+                response_format={"type": "json_object"} if (json_mode and (not self.base_url or "api.openai.com" in self.base_url)) else None
             )
             return response.choices[0].message.content or ""
         except Exception as e:
@@ -92,7 +95,7 @@ class OpenAIProvider(LLMProvider):
                 model=model_name,
                 messages=messages,
                 temperature=temperature,
-                response_format={"type": "json_object"} if json_mode else None
+                response_format={"type": "json_object"} if (json_mode and (not self.base_url or "api.openai.com" in self.base_url)) else None
             )
             return response.choices[0].message.content or ""
         except Exception as e:

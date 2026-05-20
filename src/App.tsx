@@ -35,6 +35,7 @@ interface Settings {
   auto_advance: boolean;
   hotkey: string;
   openai_api_key: string;
+  openai_base_url?: string;
   gemini_api_key?: string;
   use_omniparser: boolean;
   use_gpu: boolean;
@@ -73,6 +74,7 @@ function App() {
     auto_advance: true,
     hotkey: "Ctrl+Alt+K",
     openai_api_key: "",
+    openai_base_url: "",
     gemini_api_key: "",
     use_omniparser: false,
     use_gpu: false,
@@ -1056,45 +1058,55 @@ function App() {
 
                   <div className="settings-field">
                     <label className="field-label">Vision Model Selection</label>
-                    <select
-                      className="settings-select"
-                      value={settings.model_name}
-                      onChange={(e) => setSettings({ ...settings, model_name: e.target.value })}
-                    >
-                      {settings.llm_provider === "gemini" ? (
-                        <>
-                          <optgroup label="Gemini 3.5 (Latest)">
-                            <option value="gemini-3.5-flash">gemini-3.5-flash (Frontier-class performance at low cost)</option>
-                          </optgroup>
-                          <optgroup label="Gemini 3.1 (Stable)">
-                            <option value="gemini-3.1-pro">gemini-3.1-pro (Google's most intelligent model for complex reasoning)</option>
-                            <option value="gemini-3.1-flash-lite">gemini-3.1-flash-lite (Optimized for speed and high-scale workloads)</option>
-                          </optgroup>
-                          <optgroup label="Gemini 2.5 (Legacy support)">
-                            <option value="gemini-2.5-pro">gemini-2.5-pro (Former flagship model widely used for production)</option>
-                            <option value="gemini-2.5-flash">gemini-2.5-flash (Fast, cost-efficient multimodal model)</option>
-                          </optgroup>
-                        </>
-                      ) : (
-                        <>
-                          <optgroup label="Flagship Frontier Models">
-                            <option value="gpt-5.5">gpt-5.5 (Premier Frontier, Complex Reasoning)</option>
-                            <option value="gpt-5.4">gpt-5.4 (Flagship Professional, Reasoning & Tool Use)</option>
-                            <option value="gpt-5.2">gpt-5.2 (General Instructions & Coding)</option>
-                            <option value="gpt-5.1">gpt-5.1 (Coding & Agentic, Configurable Reasoning)</option>
-                            <option value="gpt-4o">gpt-4o (Legacy Vision Intelligent)</option>
-                          </optgroup>
-                          <optgroup label="Cost-Efficient & Mini Models">
-                            <option value="gpt-5.4-mini">gpt-5.4-mini (Strongest Mini for Subagents)</option>
-                            <option value="gpt-4o-mini">gpt-4o-mini (Fast, Multimodal Everyday)</option>
-                            <option value="gpt-5-mini">gpt-5-mini (Lightweight, Responsive Coding)</option>
-                            <option value="gpt-4.1-mini">gpt-4.1-mini (Specialized Instruction Follower)</option>
-                            <option value="gpt-4.1-nano">gpt-4.1-nano (Specialized High-Volume Batch)</option>
-                            <option value="gpt-5-nano">gpt-5-nano (Ultra-Efficient Scaled Workflows)</option>
-                          </optgroup>
-                        </>
-                      )}
-                    </select>
+                    {settings.llm_provider === "openai" && settings.openai_base_url ? (
+                      <input
+                        type="text"
+                        className="settings-input"
+                        placeholder="e.g. meta/llama3-70b-instruct or llama3.1"
+                        value={settings.model_name}
+                        onChange={(e) => setSettings({ ...settings, model_name: e.target.value })}
+                      />
+                    ) : (
+                      <select
+                        className="settings-select"
+                        value={settings.model_name}
+                        onChange={(e) => setSettings({ ...settings, model_name: e.target.value })}
+                      >
+                        {settings.llm_provider === "gemini" ? (
+                          <>
+                            <optgroup label="Gemini 3.5 (Latest)">
+                              <option value="gemini-3.5-flash">gemini-3.5-flash (Frontier-class performance at low cost)</option>
+                            </optgroup>
+                            <optgroup label="Gemini 3.1 (Stable)">
+                              <option value="gemini-3.1-pro">gemini-3.1-pro (Google's most intelligent model for complex reasoning)</option>
+                              <option value="gemini-3.1-flash-lite">gemini-3.1-flash-lite (Optimized for speed and high-scale workloads)</option>
+                            </optgroup>
+                            <optgroup label="Gemini 2.5 (Legacy support)">
+                              <option value="gemini-2.5-pro">gemini-2.5-pro (Former flagship model widely used for production)</option>
+                              <option value="gemini-2.5-flash">gemini-2.5-flash (Fast, cost-efficient multimodal model)</option>
+                            </optgroup>
+                          </>
+                        ) : (
+                          <>
+                            <optgroup label="Flagship Frontier Models">
+                              <option value="gpt-5.5">gpt-5.5 (Premier Frontier, Complex Reasoning)</option>
+                              <option value="gpt-5.4">gpt-5.4 (Flagship Professional, Reasoning & Tool Use)</option>
+                              <option value="gpt-5.2">gpt-5.2 (General Instructions & Coding)</option>
+                              <option value="gpt-5.1">gpt-5.1 (Coding & Agentic, Configurable Reasoning)</option>
+                              <option value="gpt-4o">gpt-4o (Legacy Vision Intelligent)</option>
+                            </optgroup>
+                            <optgroup label="Cost-Efficient & Mini Models">
+                              <option value="gpt-5.4-mini">gpt-5.4-mini (Strongest Mini for Subagents)</option>
+                              <option value="gpt-4o-mini">gpt-4o-mini (Fast, Multimodal Everyday)</option>
+                              <option value="gpt-5-mini">gpt-5-mini (Lightweight, Responsive Coding)</option>
+                              <option value="gpt-4.1-mini">gpt-4.1-mini (Specialized Instruction Follower)</option>
+                              <option value="gpt-4.1-nano">gpt-4.1-nano (Specialized High-Volume Batch)</option>
+                              <option value="gpt-5-nano">gpt-5-nano (Ultra-Efficient Scaled Workflows)</option>
+                            </optgroup>
+                          </>
+                        )}
+                      </select>
+                    )}
                   </div>
 
                   <div className="settings-field">
@@ -1127,6 +1139,18 @@ function App() {
                       onChange={(e) => setSettings({ ...settings, openai_api_key: e.target.value })}
                     />
                     <small className="field-help">API key is saved securely using the Windows Credential Manager.</small>
+                  </div>
+
+                  <div className="settings-field">
+                    <label className="field-label">OpenAI Custom Base URL</label>
+                    <input
+                      type="text"
+                      className="settings-input"
+                      placeholder="e.g. https://integrate.api.nvidia.com/v1"
+                      value={settings.openai_base_url || ""}
+                      onChange={(e) => setSettings({ ...settings, openai_base_url: e.target.value })}
+                    />
+                    <small className="field-help">Leave empty to use default OpenAI endpoint, or enter a custom endpoint URL (e.g. for NVIDIA NIM, Groq, OpenRouter, or local Ollama).</small>
                   </div>
 
                   <div className="settings-field">

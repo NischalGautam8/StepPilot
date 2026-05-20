@@ -176,6 +176,13 @@ class Agent:
                 cleaned_response = cleaned_response[:-3]
             cleaned_response = cleaned_response.strip()
 
+            # Attempt to extract JSON if it is wrapped in conversational text
+            if not (cleaned_response.startswith("{") and cleaned_response.endswith("}")):
+                start_idx = cleaned_response.find("{")
+                end_idx = cleaned_response.rfind("}")
+                if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
+                    cleaned_response = cleaned_response[start_idx:end_idx + 1]
+
             action_data = json.loads(cleaned_response)
             
             # Basic validation
