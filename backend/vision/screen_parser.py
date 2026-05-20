@@ -257,22 +257,15 @@ class ScreenParser:
         except Exception:
             pass
             
-        # Concurrently run OCR, Accessibility, and optionally OmniParser sweeps
-        tasks = [
-            asyncio.to_thread(self.run_ocr_on_preprocessed, preprocessed_np, crop_bounds),
-            asyncio.to_thread(self.a11y_reader.get_active_window_elements, orig_w, orig_h)
-        ]
+        # Run sweeps sequentially on the main thread to prevent C++ multithreading/COM crashes
+        ocr_results = self.run_ocr_on_preprocessed(preprocessed_np, crop_bounds)
+        a11y_results = self.a11y_reader.get_active_window_elements(orig_w, orig_h)
         
         use_omniparser = os.getenv("USE_OMNIPARSER", "false").lower() == "true"
+        icon_results = []
         if use_omniparser:
-            logger.info("OmniParser is enabled. Queueing icon detection task...")
-            tasks.append(asyncio.to_thread(self.run_ui_detector_on_preprocessed, preprocessed_np, crop_bounds))
-            
-        results = await asyncio.gather(*tasks)
-        
-        ocr_results = results[0]
-        a11y_results = results[1]
-        icon_results = results[2] if use_omniparser else []
+            logger.info("OmniParser is enabled. Running icon detection...")
+            icon_results = self.run_ui_detector_on_preprocessed(preprocessed_np, crop_bounds)
         
         # Merge elements (three-way merge)
         unified_elements = self.merger.merge(ocr_results, a11y_results, icon_results)

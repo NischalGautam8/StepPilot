@@ -16,7 +16,9 @@ DEFAULT_SETTINGS = {
     "auto_advance": True,
     "hotkey": "Ctrl+Alt+K",
     "use_omniparser": False,
-    "use_gpu": False
+    "use_gpu": False,
+    "execution_mode": "supervised",
+    "openai_base_url": ""
 }
 
 def load_settings() -> Dict[str, Any]:
@@ -114,16 +116,23 @@ def apply_settings(settings: Dict[str, Any] = None) -> None:
     provider = settings.get("llm_provider", "copilot").lower()
     api_key = settings.get("openai_api_key", "")
     gemini_key = settings.get("gemini_api_key", "")
+    base_url = settings.get("openai_base_url", "")
     
     os.environ["LLM_PROVIDER"] = provider
     os.environ["MODEL_NAME"] = settings.get("model_name", "gpt-4o-mini")
     os.environ["USE_OMNIPARSER"] = str(settings.get("use_omniparser", False)).lower()
     os.environ["USE_GPU"] = str(settings.get("use_gpu", False)).lower()
+    os.environ["EXECUTION_MODE"] = settings.get("execution_mode", "supervised").lower()
     
     if api_key:
         os.environ["OPENAI_API_KEY"] = api_key
     elif "OPENAI_API_KEY" in os.environ:
         del os.environ["OPENAI_API_KEY"]
+
+    if base_url:
+        os.environ["OPENAI_BASE_URL"] = base_url
+    elif "OPENAI_BASE_URL" in os.environ:
+        del os.environ["OPENAI_BASE_URL"]
 
     if gemini_key:
         os.environ["GEMINI_API_KEY"] = gemini_key
@@ -132,6 +141,8 @@ def apply_settings(settings: Dict[str, Any] = None) -> None:
     
     logger.info(
         f"Applied settings: LLM_PROVIDER={provider}, MODEL_NAME={os.environ['MODEL_NAME']}, "
+        f"EXECUTION_MODE={os.environ['EXECUTION_MODE']}, "
+        f"OPENAI_BASE_URL={base_url or 'Default'}, "
         f"OPENAI_API_KEY={'***' if api_key else 'None'}, "
         f"GEMINI_API_KEY={'***' if gemini_key else 'None'}"
     )
