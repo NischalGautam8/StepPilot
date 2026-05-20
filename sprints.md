@@ -333,7 +333,7 @@
 
 ## Phase 5: Autonomous Agent (Sprints 13–15)
 
-### Sprint 13: Mouse & Keyboard Automation
+### Sprint 13: Mouse & Keyboard Automation [DONE]
 **Goal**: Enable LLM-driven autonomous control of mouse and keyboard.
 **Duration**: 1 week
 

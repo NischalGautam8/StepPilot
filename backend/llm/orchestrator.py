@@ -142,7 +142,8 @@ class LLMOrchestrator:
         provider, provider_name = self._get_provider()
         
         try:
-            return await provider.complete_with_vision(
+            return await self._call_with_timeout_and_retry(
+                provider.complete_with_vision,
                 prompt=prompt,
                 image_bytes=image_bytes,
                 system_prompt=system_prompt,
@@ -152,11 +153,12 @@ class LLMOrchestrator:
         except Exception as e:
             if provider_name == "copilot":
                 logger.warning(
-                    f"Copilot vision request failed: {e}. "
+                    f"Copilot vision request failed after {MAX_RETRIES} retries: {e}. "
                     f"Attempting automatic failover to OpenAIProvider..."
                 )
                 try:
-                    return await self.openai_provider.complete_with_vision(
+                    return await self._call_with_timeout_and_retry(
+                        self.openai_provider.complete_with_vision,
                         prompt=prompt,
                         image_bytes=image_bytes,
                         system_prompt=system_prompt,

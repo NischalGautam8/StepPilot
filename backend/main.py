@@ -1,3 +1,11 @@
+import os
+os.environ['FLAGS_use_mkldnn'] = '0'
+os.environ['FLAGS_use_onednn'] = '0'
+os.environ['FLAGS_enable_onednn'] = '0'
+os.environ['FLAGS_enable_mkldnn'] = '0'
+os.environ['FLAGS_enable_pir_api'] = '0'
+os.environ['FLAGS_enable_pir_in_executor'] = '0'
+
 import logging
 import base64
 from io import BytesIO
@@ -7,6 +15,7 @@ import uvicorn
 from PIL import Image
 import cv2
 import numpy as np
+import pyautogui
 
 # Initialize structured logging first
 from core.logger import setup_logging, get_logger, log_error, log_websocket_event
@@ -22,8 +31,16 @@ apply_settings()
 # Initialize ScreenParser & TaskPlanner lazily to avoid heavy model loading on startup
 screen_parser = None
 task_planner = None
+agent_executor = None
+actuator = None
 last_parsed_elements = []
 last_screenshot_bytes = None
+
+# Agent state variables
+is_agent_running = False
+current_task_query = ""
+agent_history = []
+agent_mode = "supervised"
 
 app = FastAPI(
     title="StepPilot (Cursor-King) Backend",
@@ -103,6 +120,24 @@ async def handle_screenshot(message: dict, client_id: str):
         logger.error(f"Error handling and parsing screenshot: {e}", exc_info=True)
         await ws_manager.send_error(f"Screenshot processing error: {str(e)}", client_id)
 
+
+async def capture_and_parse_screen():
+    global screen_parser, last_parsed_elements, last_screenshot_bytes
+    if screen_parser is None:
+        logger.info("Initializing ScreenParser for agent screen capture...")
+        screen_parser = ScreenParser()
+        
+    # Capture screen using PyAutoGUI
+    screenshot = pyautogui.screenshot()
+    image_np = cv2.cvtColor(np.array(screenshot), cv2.COLOR_RGB2BGR)
+    
+    preprocessed_np, crop_bounds = screen_parser.preprocess_image(image_np)
+    _, encoded_img = cv2.imencode(".jpg", preprocessed_np)
+    last_screenshot_bytes = encoded_img.tobytes()
+    
+    detected_elements = await screen_parser.parse_screen(preprocessed_np, crop_bounds)
+    last_parsed_elements = detected_elements
+    return detected_elements
 
 
 async def handle_task_start(message: dict, client_id: str):
@@ -296,6 +331,175 @@ async def handle_cancel_download(message: dict, client_id: str):
         logger.error(f"Error executing cancel_download: {e}", exc_info=True)
 
 
+async def handle_agent_start(message: dict, client_id: str):
+    """Start the interactive agent loop"""
+    global agent_executor, actuator, last_parsed_elements, last_screenshot_bytes
+    global is_agent_running, current_task_query, agent_history, agent_mode
+    
+    try:
+        query = message.get("query", "")
+        mode = message.get("mode", "supervised").lower()
+        
+        logger.info(f"Agent starting task: '{query}' in mode={mode}")
+        
+        if agent_executor is None:
+            from task.agent import Agent
+            agent_executor = Agent()
+        if actuator is None:
+            from task.actuator import Actuator
+            actuator = Actuator()
+            
+        is_agent_running = True
+        current_task_query = query
+        agent_mode = mode
+        agent_history = []
+        
+        # Force a fresh capture and parse on start
+        elements = await capture_and_parse_screen()
+            
+        # Get first action
+        next_action = await agent_executor.get_next_action(
+            query=current_task_query,
+            elements=elements,
+            history=agent_history,
+            image_bytes=last_screenshot_bytes
+        )
+        
+        await ws_manager.send_message({
+            "type": "agent_action_proposed",
+            "action": next_action,
+            "history": agent_history
+        }, client_id)
+        
+    except Exception as e:
+        logger.error(f"Error starting agent task: {e}", exc_info=True)
+        await ws_manager.send_error(f"Agent start error: {str(e)}", client_id)
+
+
+async def handle_agent_step_execute(message: dict, client_id: str):
+    """Execute the proposed agent action and query LLM for the next step"""
+    global agent_executor, actuator, last_parsed_elements, last_screenshot_bytes
+    global is_agent_running, current_task_query, agent_history, agent_mode
+    
+    if not is_agent_running:
+        await ws_manager.send_error("Agent is not currently running a task.", client_id)
+        return
+        
+    try:
+        proposed_action = message.get("action", {})
+        tool = proposed_action.get("tool")
+        args = proposed_action.get("args", {})
+        
+        logger.info(f"Executing agent step: tool={tool}, args={args}")
+        
+        if tool == "finish":
+            is_agent_running = False
+            result_str = "task completed"
+            agent_history.append({
+                "tool": tool,
+                "args": args,
+                "result": result_str
+            })
+            await ws_manager.send_message({
+                "type": "agent_finished",
+                "success": args.get("success", True),
+                "message": args.get("message", "Task completed successfully."),
+                "history": agent_history
+            }, client_id)
+            return
+            
+        result_str = "success"
+        if agent_mode in ["supervised", "autonomous", "yolo"]:
+            success = False
+            if tool == "click":
+                x = int(args.get("x", 0))
+                y = int(args.get("y", 0))
+                button = args.get("button", "left")
+                if button == "double":
+                    success = actuator.double_click(x, y)
+                elif button == "right":
+                    success = actuator.right_click(x, y)
+                else:
+                    success = actuator.click(x, y, button=button)
+            elif tool == "type_text":
+                text = args.get("text", "")
+                success = actuator.type_text(text)
+            elif tool == "key_press":
+                keys = args.get("keys", "")
+                success = actuator.key_press(keys)
+            elif tool == "scroll":
+                x = int(args.get("x", 0))
+                y = int(args.get("y", 0))
+                direction = args.get("direction", "down")
+                amount = int(args.get("amount", 3))
+                success = actuator.scroll(x, y, direction, amount)
+            elif tool == "wait":
+                seconds = float(args.get("seconds", 1.0))
+                success = actuator.wait(seconds)
+            elif tool == "read_screen":
+                try:
+                    logger.info("Executing read_screen tool: capturing fresh screenshot and parsing UIElements...")
+                    elements = await capture_and_parse_screen()
+                    success = True
+                    result_str = f"screen updated: found {len(elements)} elements"
+                except Exception as ex:
+                    logger.error(f"Failed to read screen: {ex}")
+                    success = False
+                    result_str = f"failed to read screen: {str(ex)}"
+                
+            if tool != "read_screen":
+                result_str = "success" if success else "failed"
+        else:
+            # Guided mode: User executed this step manually
+            result_str = "completed by user"
+            
+        # Append execution result to history
+        agent_history.append({
+            "tool": tool,
+            "args": args,
+            "result": result_str
+        })
+        
+        # If the tool executed was read_screen, the screen state has already been updated.
+        # Otherwise, we DO NOT automatically capture/parse the screen. We use cached elements.
+        if tool == "read_screen":
+            # elements was already populated during execution above
+            pass
+        else:
+            elements = last_parsed_elements
+            
+        # Get next action proposal from LLM
+        next_action = await agent_executor.get_next_action(
+            query=current_task_query,
+            elements=elements,
+            history=agent_history,
+            image_bytes=last_screenshot_bytes
+        )
+        
+        # Send proposed action to frontend
+        await ws_manager.send_message({
+            "type": "agent_action_proposed",
+            "action": next_action,
+            "history": agent_history
+        }, client_id)
+        
+    except Exception as e:
+        logger.error(f"Error executing agent step: {e}", exc_info=True)
+        await ws_manager.send_error(f"Agent execution error: {str(e)}", client_id)
+
+
+async def handle_agent_abort(message: dict, client_id: str):
+    """Abort the running agent loop"""
+    global is_agent_running, agent_history
+    is_agent_running = False
+    logger.info("Agent task execution aborted by user.")
+    await ws_manager.send_message({
+        "type": "agent_aborted",
+        "message": "Task aborted by user.",
+        "history": agent_history
+    }, client_id)
+
+
 # Register message handlers
 ws_manager.register_handler(MessageType.SCREENSHOT, handle_screenshot)
 ws_manager.register_handler(MessageType.TASK_START, handle_task_start)
@@ -305,6 +509,9 @@ ws_manager.register_handler("save_settings", handle_save_settings)
 ws_manager.register_handler("step_result", handle_step_result)
 ws_manager.register_handler("download_models", handle_download_models)
 ws_manager.register_handler("cancel_download", handle_cancel_download)
+ws_manager.register_handler("agent_start", handle_agent_start)
+ws_manager.register_handler("agent_step_execute", handle_agent_step_execute)
+ws_manager.register_handler("agent_abort", handle_agent_abort)
 
 
 @app.get("/health")

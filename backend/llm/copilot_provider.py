@@ -91,57 +91,13 @@ class CopilotProvider(LLMProvider):
         json_mode: bool = False,
         temperature: float = 0.2
     ) -> str:
-        await self._ensure_client()
-        session = None
-        try:
-            from copilot.session import PermissionHandler, BlobAttachment
-            
-            session = await self.client.create_session(
-                on_permission_request=PermissionHandler.approve_all,
-                github_token=self.github_token
-            )
-            
-            # Encode image bytes to base64
-            base64_image = base64.b64encode(image_bytes).decode('utf-8')
-            
-            attachment = BlobAttachment({
-                "type": "blob",
-                "mimeType": "image/jpeg",
-                "displayName": "screenshot.jpg",
-                "data": base64_image
-            })
-            
-            full_prompt = prompt
-            if system_prompt:
-                full_prompt = f"System Instructions:\n{system_prompt}\n\nUser Request:\n{prompt}"
-                if json_mode:
-                    full_prompt += "\n\nIMPORTANT: Return ONLY a valid JSON object."
-            
-            logger.info("Sending prompt with vision attachment to Copilot session...")
-            response = await session.send_and_wait(full_prompt, attachments=[attachment], timeout=60.0)
-            
-            if response and hasattr(response, 'data'):
-                from copilot.generated.session_events import AssistantMessageData
-                if isinstance(response.data, AssistantMessageData):
-                    return response.data.content or ""
-            
-            # Fallback: scan session message logs
-            messages = await session.get_messages()
-            for msg in reversed(messages):
-                from copilot.generated.session_events import AssistantMessageData
-                if isinstance(msg.data, AssistantMessageData):
-                    return msg.data.content or ""
-                    
-            return ""
-        except Exception as e:
-            logger.error(f"Copilot vision complete call failed: {e}", exc_info=True)
-            raise RuntimeError(f"Copilot vision complete failed: {e}")
-        finally:
-            if session:
-                try:
-                    await session.destroy()
-                except Exception:
-                    pass
+        logger.warning("Copilot SDK does not support vision natively. Falling back to text-first mode.")
+        return await self.complete(
+            prompt=prompt,
+            system_prompt=system_prompt,
+            json_mode=json_mode,
+            temperature=temperature
+        )
 
     async def stream(
         self, 

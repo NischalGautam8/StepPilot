@@ -43,9 +43,10 @@ class OpenAIProvider(LLMProvider):
                 messages.append({"role": "system", "content": system_prompt})
             messages.append({"role": "user", "content": prompt})
 
-            logger.info("Executing OpenAI text completion request using gpt-4o-mini...")
+            model_name = os.getenv("MODEL_NAME", "gpt-4o-mini")
+            logger.info(f"Executing OpenAI text completion request using {model_name}...")
             response = await self.client.chat.completions.create(
-                model="gpt-4o-mini",
+                model=model_name,
                 messages=messages,
                 temperature=temperature,
                 response_format={"type": "json_object"} if json_mode else None
@@ -85,9 +86,10 @@ class OpenAIProvider(LLMProvider):
                 ]
             })
 
-            logger.info("Executing OpenAI vision request using gpt-4o...")
+            model_name = os.getenv("MODEL_NAME", "gpt-4o")
+            logger.info(f"Executing OpenAI vision request using {model_name}...")
             response = await self.client.chat.completions.create(
-                model="gpt-4o",
+                model=model_name,
                 messages=messages,
                 temperature=temperature,
                 response_format={"type": "json_object"} if json_mode else None
@@ -110,9 +112,10 @@ class OpenAIProvider(LLMProvider):
                 messages.append({"role": "system", "content": system_prompt})
             messages.append({"role": "user", "content": prompt})
 
-            logger.info("Executing OpenAI streaming chat request...")
+            model_name = os.getenv("MODEL_NAME", "gpt-4o-mini")
+            logger.info(f"Executing OpenAI streaming chat request using {model_name}...")
             response = await self.client.chat.completions.create(
-                model="gpt-4o-mini",
+                model=model_name,
                 messages=messages,
                 temperature=temperature,
                 stream=True

@@ -39,6 +39,7 @@ interface Settings {
   use_omniparser: boolean;
   use_gpu: boolean;
   models_downloaded?: boolean;
+  execution_mode: string;
 }
 
 interface HistoryItem {
@@ -75,12 +76,19 @@ function App() {
     gemini_api_key: "",
     use_omniparser: false,
     use_gpu: false,
-    models_downloaded: false
+    models_downloaded: false,
+    execution_mode: "supervised"
   });
   const [currentPlan, setCurrentPlan] = useState<any>(null);
   const [currentStepIndex, setCurrentStepIndex] = useState<number>(-1);
   const [taskHistory, setTaskHistory] = useState<HistoryItem[]>([]);
   const [saveSuccess, setSaveSuccess] = useState(false);
+  
+  // Agent States (Sprint 13)
+  const [agentProposedAction, setAgentProposedAction] = useState<any>(null);
+  const [agentHistory, setAgentHistory] = useState<any[]>([]);
+  const [isAgentRunning, setIsAgentRunning] = useState(false);
+  const [countdown, setCountdown] = useState<number | null>(null);
   
   // Model Download States
   const [downloadProgress, setDownloadProgress] = useState<number | null>(null);
@@ -143,6 +151,49 @@ function App() {
                 setDownloadStatus("");
               }, 6000);
             }
+          } else if (data.type === "agent_action_proposed") {
+            const action = data.action;
+            const history = data.history || [];
+            setAgentProposedAction(action);
+            setAgentHistory(history);
+            setIsAgentRunning(true);
+            
+            let actionDesc = "";
+            if (action.tool === "click") {
+              actionDesc = `Click at coordinates (${action.args.x}, ${action.args.y}) with button: ${action.args.button}`;
+            } else if (action.tool === "type_text") {
+              actionDesc = `Type text: "${action.args.text}"`;
+            } else if (action.tool === "key_press") {
+              actionDesc = `Press keys: "${action.args.keys}"`;
+            } else if (action.tool === "scroll") {
+              actionDesc = `Scroll ${action.args.direction} by ${action.args.amount} at (${action.args.x}, ${action.args.y})`;
+            } else if (action.tool === "wait") {
+              actionDesc = `Wait for ${action.args.seconds} seconds`;
+            } else if (action.tool === "read_screen") {
+              actionDesc = `Read screen & update visible elements`;
+            } else if (action.tool === "finish") {
+              actionDesc = `Finish task (${action.args.success ? "Success" : "Failed"}): ${action.args.message}`;
+            }
+            
+            addAssistantMessage(`Proposed Action: ${actionDesc}\nReasoning: "${action.thought}"`);
+            
+            if (settings.execution_mode === "yolo") {
+              if (socket && socket.readyState === WebSocket.OPEN) {
+                socket.send(JSON.stringify({ type: "agent_step_execute", action }));
+              }
+              setAgentProposedAction(null);
+            } else if (settings.execution_mode === "autonomous") {
+              setCountdown(1.5);
+            }
+          } else if (data.type === "agent_finished") {
+            setIsAgentRunning(false);
+            setAgentProposedAction(null);
+            addSystemMessage(`✓ Task Completed: ${data.message}`);
+            addAssistantMessage(`Task execution finished! ${data.message}`);
+          } else if (data.type === "agent_aborted") {
+            setIsAgentRunning(false);
+            setAgentProposedAction(null);
+            addSystemMessage(`❌ Task Aborted: ${data.message}`);
           } else if (data.type === "ack" && data.received === "task_start") {
             const plan = data.plan;
             if (plan && plan.steps && plan.steps.length > 0) {
@@ -183,6 +234,38 @@ function App() {
       socket?.close();
     };
   }, []);
+
+  // Agent Helpers (Sprint 13)
+  const handleApproveAction = (action: any) => {
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      setCountdown(null);
+      wsRef.current.send(JSON.stringify({ type: "agent_step_execute", action }));
+      setAgentProposedAction(null);
+    }
+  };
+
+  const handleAbortAgent = () => {
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      setCountdown(null);
+      wsRef.current.send(JSON.stringify({ type: "agent_abort" }));
+      setAgentProposedAction(null);
+    }
+  };
+
+  useEffect(() => {
+    if (settings.execution_mode !== "autonomous" || countdown === null || !agentProposedAction) return;
+
+    if (countdown <= 0) {
+      handleApproveAction(agentProposedAction);
+      return;
+    }
+
+    const timer = setTimeout(() => {
+      setCountdown(prev => (prev !== null ? prev - 0.5 : null));
+    }, 500);
+
+    return () => clearTimeout(timer);
+  }, [countdown, agentProposedAction, settings.execution_mode]);
 
   // Helpers for step progression
   const startPlan = (plan: any) => {
@@ -438,7 +521,14 @@ function App() {
 
     // Send query to local FastAPI via websocket
     if (wsRef.current && wsStatus === "connected") {
-      wsRef.current.send(JSON.stringify({ type: "task_start", query: userMsg }));
+      setAgentHistory([]);
+      setAgentProposedAction(null);
+      setIsAgentRunning(true);
+      wsRef.current.send(JSON.stringify({
+        type: "agent_start",
+        query: userMsg,
+        mode: settings.execution_mode
+      }));
     } else {
       setTimeout(() => {
         addAssistantMessage("I received your task. (Note: FastAPI backend websocket is currently disconnected. Start backend server using dev.ps1 script.)");
@@ -570,7 +660,156 @@ function App() {
         {/* Dynamic Content Pane */}
         {activeTab === "chat" && (
           <section className="app-chat-pane">
-            {currentPlan && (
+            {isAgentRunning && (
+              <div className="task-progress-hud agent-hud" style={{
+                background: "rgba(30, 27, 75, 0.85)",
+                border: "1px solid rgba(139, 92, 246, 0.4)",
+                boxShadow: "0 8px 32px 0 rgba(139, 92, 246, 0.2)",
+                backdropFilter: "blur(12px)",
+                borderRadius: "12px",
+                padding: "16px",
+                display: "flex",
+                flexDirection: "column",
+                gap: "12px",
+                marginBottom: "16px",
+                position: "relative",
+                zIndex: 10
+              }}>
+                <div className="hud-row" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <div className="hud-info" style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                    <Sparkles className="hud-icon animate-pulse" style={{ color: "#a78bfa" }} size={18} />
+                    <span className="hud-task-title" style={{ fontWeight: "700", color: "#e9d5ff", letterSpacing: "0.5px" }}>
+                      AI Agent Loop Active ({settings.execution_mode.toUpperCase()})
+                    </span>
+                  </div>
+                  <div className="hud-stats">
+                    <span className="hud-step-badge" style={{
+                      background: "rgba(139, 92, 246, 0.2)",
+                      border: "1px solid rgba(139, 92, 246, 0.4)",
+                      padding: "2px 8px",
+                      borderRadius: "12px",
+                      fontSize: "11px",
+                      color: "#c084fc",
+                      fontWeight: "600"
+                    }}>
+                      Action #{agentHistory.length + 1}
+                    </span>
+                  </div>
+                </div>
+
+                {/* History list preview */}
+                {agentHistory.length > 0 && (
+                  <div className="agent-history-summary" style={{
+                    fontSize: "11px",
+                    color: "rgba(255, 255, 255, 0.5)",
+                    background: "rgba(0, 0, 0, 0.2)",
+                    borderRadius: "6px",
+                    padding: "6px 10px",
+                    maxHeight: "60px",
+                    overflowY: "auto"
+                  }}>
+                    <div style={{ fontWeight: "600", marginBottom: "2px" }}>Previous Actions:</div>
+                    {agentHistory.map((h, i) => (
+                      <div key={i}>
+                        ✓ {h.tool}({JSON.stringify(h.args)}) → <span style={{ color: h.result === "success" ? "#34d399" : "#f87171" }}>{h.result}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {agentProposedAction ? (
+                  <div className="agent-proposed-action-block" style={{
+                    background: "rgba(255, 255, 255, 0.03)",
+                    border: "1px solid rgba(255, 255, 255, 0.08)",
+                    borderRadius: "8px",
+                    padding: "12px",
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: "8px"
+                  }}>
+                    <div style={{ fontSize: "12px", color: "#a78bfa", fontStyle: "italic" }}>
+                      <strong>Thought:</strong> "{agentProposedAction.thought}"
+                    </div>
+                    <div style={{ fontSize: "13px", color: "#fff", display: "flex", alignItems: "center", gap: "6px" }}>
+                      <strong>Tool Call:</strong> 
+                      <code style={{
+                        background: "rgba(139, 92, 246, 0.25)",
+                        padding: "2px 6px",
+                        borderRadius: "4px",
+                        color: "#ddd",
+                        fontFamily: "monospace"
+                      }}>
+                        {agentProposedAction.tool}({JSON.stringify(agentProposedAction.args)})
+                      </code>
+                    </div>
+
+                    <div className="agent-action-buttons" style={{ display: "flex", gap: "10px", marginTop: "4px", alignItems: "center" }}>
+                      {settings.execution_mode === "guided" && (
+                        <button className="hud-next-button" style={{ width: "100%", justifySelf: "stretch" }} onClick={() => handleApproveAction(agentProposedAction)}>
+                          I completed this step, proceed →
+                        </button>
+                      )}
+                      
+                      {settings.execution_mode === "supervised" && (
+                        <>
+                          <button className="hud-next-button" style={{ flex: 1, padding: "8px 16px", borderRadius: "6px", fontWeight: "600", background: "var(--accent-primary)", border: "none", cursor: "pointer", color: "white" }} onClick={() => handleApproveAction(agentProposedAction)}>
+                            Approve Action & Run
+                          </button>
+                          <button className="hud-cancel-button" style={{ background: "rgba(248, 113, 113, 0.15)", color: "#f87171", border: "1px solid rgba(248, 113, 113, 0.3)", padding: "8px 12px", borderRadius: "6px", cursor: "pointer" }} onClick={handleAbortAgent}>
+                            Abort Agent
+                          </button>
+                        </>
+                      )}
+
+                      {settings.execution_mode === "autonomous" && (
+                        <>
+                          <div style={{ display: "flex", alignItems: "center", gap: "10px", flex: 1 }}>
+                            <div className="countdown-ring" style={{
+                              width: "28px",
+                              height: "28px",
+                              borderRadius: "50%",
+                              border: "2px solid #8b5cf6",
+                              display: "flex",
+                              alignItems: "center",
+                              justifyContent: "center",
+                              fontSize: "11px",
+                              fontWeight: "bold",
+                              color: "#c084fc",
+                              animation: "pulse 1.5s infinite"
+                            }}>
+                              {countdown}
+                            </div>
+                            <span style={{ fontSize: "12px", color: "rgba(255, 255, 255, 0.7)" }}>
+                              Executing automatically...
+                            </span>
+                          </div>
+                          <button className="hud-cancel-button" style={{ background: "rgba(248, 113, 113, 0.2)", color: "#f87171", border: "1px solid rgba(248, 113, 113, 0.4)", padding: "8px 16px", borderRadius: "6px", cursor: "pointer", fontWeight: "600" }} onClick={handleAbortAgent}>
+                            PAUSE AGENT
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                ) : (
+                  <div style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "13px", color: "rgba(255, 255, 255, 0.7)" }}>
+                    <div className="agent-thinking-spinner" style={{
+                      width: "14px",
+                      height: "14px",
+                      border: "2px solid rgba(139, 92, 246, 0.2)",
+                      borderTopColor: "#a78bfa",
+                      borderRadius: "50%",
+                      animation: "spin 0.8s linear infinite"
+                    }}></div>
+                    <span>Agent is thinking / analyzing screen...</span>
+                    <button className="hud-cancel-button" style={{ marginLeft: "auto", fontSize: "12px", padding: "4px 8px" }} onClick={handleAbortAgent}>
+                      Cancel Task
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {!isAgentRunning && currentPlan && (
               <div className="task-progress-hud">
                 <div className="hud-row">
                   <div className="hud-info">
@@ -612,6 +851,26 @@ function App() {
 
             <div className="chat-input-container">
               <form onSubmit={handleSendMessage} className="chat-input-form">
+                <select
+                  value={settings.execution_mode}
+                  onChange={(e) => {
+                    const newMode = e.target.value;
+                    setSettings(prev => ({ ...prev, execution_mode: newMode }));
+                    if (wsRef.current && wsStatus === "connected") {
+                      wsRef.current.send(JSON.stringify({
+                        type: "save_settings",
+                        settings: { ...settings, execution_mode: newMode }
+                      }));
+                    }
+                  }}
+                  className="mode-select"
+                  title="Execution Mode"
+                >
+                  <option value="supervised">Supervised</option>
+                  <option value="yolo">YOLO</option>
+                  <option value="autonomous">Autonomous</option>
+                  <option value="guided">Guided</option>
+                </select>
                 <input
                   type="text"
                   className="chat-input"
@@ -836,6 +1095,26 @@ function App() {
                         </>
                       )}
                     </select>
+                  </div>
+
+                  <div className="settings-field">
+                    <label className="field-label">Execution & Autonomy Mode</label>
+                    <select
+                      className="settings-select"
+                      value={settings.execution_mode}
+                      onChange={(e) => setSettings({ ...settings, execution_mode: e.target.value })}
+                    >
+                      <option value="guided">Guided Mode (Draw Overlay Hints; User Executes Actions)</option>
+                      <option value="supervised">Supervised Mode (Confirm Every Backend Action Before Run)</option>
+                      <option value="yolo">YOLO Mode (Full Hands-Free Execution; Instant Tool Runs)</option>
+                      <option value="autonomous">Autonomous Mode (Full Hands-Free execution with countdown)</option>
+                    </select>
+                    <small className="field-help" style={{ color: "rgba(255, 255, 255, 0.4)", fontSize: "11px", marginTop: "4px", display: "block" }}>
+                      {settings.execution_mode === "guided" && "Guided Mode displays bounding boxes and visual indicators, instructing you where to click manually."}
+                      {settings.execution_mode === "supervised" && "Supervised Mode queries the AI agent step-by-step and asks for your click confirmation in the UI before performing mouse or keyboard moves."}
+                      {settings.execution_mode === "yolo" && "YOLO Mode executes steps instantly as soon as they are proposed by the LLM without any confirmation or countdown."}
+                      {settings.execution_mode === "autonomous" && "Autonomous Mode executes steps consecutively with a 1.5s countdown timer. Keep mouse at top-left corner of the screen to trigger PyAutoGUI emergency fail-safe."}
+                    </small>
                   </div>
 
                   <div className="settings-field">
