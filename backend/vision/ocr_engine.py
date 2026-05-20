@@ -1,3 +1,7 @@
+import os
+os.environ['FLAGS_use_mkldnn'] = '0'
+os.environ['FLAGS_use_onednn'] = '0'
+
 import logging
 import cv2
 import numpy as np
@@ -49,7 +53,10 @@ class OCREngine:
         try:
             # Run OCR on the image
             # PaddleOCR expects a numpy array (BGR or RGB) or file path
-            results = self.ocr.ocr(image_np, cls=True)
+            try:
+                results = self.ocr.ocr(image_np, cls=True)
+            except TypeError:
+                results = self.ocr.ocr(image_np)
             
             parsed_results = []
             if not results or not results[0]:

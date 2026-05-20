@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import os
 import cv2
 import numpy as np
 import time
@@ -21,6 +22,10 @@ class ScreenParser:
         self.ocr_engine = OCREngine(use_gpu=use_gpu, det_db_thresh=det_db_thresh)
         self.a11y_reader = A11yReader(max_depth=max_a11y_depth)
         self.merger = ElementMerger(iou_threshold=iou_threshold)
+        
+        # Lazy initialization of UIDetector (Sprint 11)
+        self.ui_detector = None
+        self.use_gpu = use_gpu
         
         # In-memory element cache (Sprint 9)
         self.cache_elements = None
@@ -176,6 +181,56 @@ class ScreenParser:
             logger.error(f"Error in OCR preprocessed pipeline: {e}", exc_info=True)
             return []
 
+    def run_ui_detector_on_preprocessed(self, preprocessed_np: np.ndarray, crop_bounds: tuple[int, int, int, int]) -> list[dict]:
+        """
+        Runs OmniParser icon detection on preprocessed image and maps coordinates back to absolute screen space.
+        """
+        if self.ui_detector is None:
+            from vision.ui_detector import UIDetector
+            use_gpu = os.getenv("USE_GPU", "false").lower() == "true"
+            logger.info(f"Initializing UIDetector with use_gpu={use_gpu}...")
+            self.ui_detector = UIDetector(use_gpu=use_gpu)
+            
+        try:
+            x1, y1, x2, y2 = crop_bounds
+            crop_w = x2 - x1
+            crop_h = y2 - y1
+            
+            prep_h, prep_w = preprocessed_np.shape[:2]
+            scale_x = crop_w / float(prep_w)
+            scale_y = crop_h / float(prep_h)
+            
+            # Detect icons on the preprocessed image
+            raw_icons = self.ui_detector.detect_icons(preprocessed_np)
+            
+            scaled_results = []
+            for item in raw_icons:
+                ox, oy, ow, oh = item["bbox"]
+                
+                # Scale back to cropped coordinates
+                ox_scaled = int(round(ox * scale_x))
+                oy_scaled = int(round(oy * scale_y))
+                ow_scaled = int(round(ow * scale_x))
+                oh_scaled = int(round(oh * scale_y))
+                
+                # Offset to absolute screen coordinate space
+                abs_x = ox_scaled + x1
+                abs_y = oy_scaled + y1
+                
+                scaled_results.append({
+                    "type": item["type"],
+                    "text": item["text"],
+                    "bbox": [abs_x, abs_y, ow_scaled, oh_scaled],
+                    "confidence": item["confidence"],
+                    "source": item["source"],
+                    "enabled": item["enabled"],
+                    "automation_id": item["automation_id"]
+                })
+            return scaled_results
+        except Exception as e:
+            logger.error(f"Error in OmniParser preprocessed pipeline: {e}", exc_info=True)
+            return []
+
     async def parse_screen(self, preprocessed_np: np.ndarray, crop_bounds: tuple[int, int, int, int]) -> list[dict]:
         """
         Parses screenshot by running OCR and A11y in parallel, caching results.
@@ -202,14 +257,25 @@ class ScreenParser:
         except Exception:
             pass
             
-        # Concurrently run OCR and Accessibility sweeps
-        ocr_task = asyncio.to_thread(self.run_ocr_on_preprocessed, preprocessed_np, crop_bounds)
-        a11y_task = asyncio.to_thread(self.a11y_reader.get_active_window_elements, orig_w, orig_h)
+        # Concurrently run OCR, Accessibility, and optionally OmniParser sweeps
+        tasks = [
+            asyncio.to_thread(self.run_ocr_on_preprocessed, preprocessed_np, crop_bounds),
+            asyncio.to_thread(self.a11y_reader.get_active_window_elements, orig_w, orig_h)
+        ]
         
-        ocr_results, a11y_results = await asyncio.gather(ocr_task, a11y_task)
+        use_omniparser = os.getenv("USE_OMNIPARSER", "false").lower() == "true"
+        if use_omniparser:
+            logger.info("OmniParser is enabled. Queueing icon detection task...")
+            tasks.append(asyncio.to_thread(self.run_ui_detector_on_preprocessed, preprocessed_np, crop_bounds))
+            
+        results = await asyncio.gather(*tasks)
         
-        # Merge elements
-        unified_elements = self.merger.merge(ocr_results, a11y_results)
+        ocr_results = results[0]
+        a11y_results = results[1]
+        icon_results = results[2] if use_omniparser else []
+        
+        # Merge elements (three-way merge)
+        unified_elements = self.merger.merge(ocr_results, a11y_results, icon_results)
         
         # Privacy redaction filter
         unified_elements = self.redact_sensitive_data(unified_elements)

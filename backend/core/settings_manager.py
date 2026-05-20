@@ -14,11 +14,13 @@ DEFAULT_SETTINGS = {
     "model_name": "gpt-4o-mini",
     "show_debug_overlay": False,
     "auto_advance": True,
-    "hotkey": "Ctrl+Alt+K"
+    "hotkey": "Ctrl+Alt+K",
+    "use_omniparser": False,
+    "use_gpu": False
 }
 
 def load_settings() -> Dict[str, Any]:
-    """Loads settings from config.json and fetches API key from keyring."""
+    """Loads settings from config.json and fetches API keys from keyring."""
     settings = DEFAULT_SETTINGS.copy()
     
     try:
@@ -32,16 +34,24 @@ def load_settings() -> Dict[str, Any]:
     except Exception as e:
         logger.error(f"Failed to load config file: {e}", exc_info=True)
 
-    # Load OpenAI API Key from Windows Credential Manager via keyring
+    # Load OpenAI API Key from keyring
     try:
         api_key = keyring.get_password("cursor-king", "openai_api_key")
         settings["openai_api_key"] = api_key or ""
     except Exception as e:
-        logger.error(f"Failed to fetch API key from keyring: {e}", exc_info=True)
+        logger.error(f"Failed to fetch OpenAI API key from keyring: {e}", exc_info=True)
         settings["openai_api_key"] = ""
+
+    # Load Gemini API Key from keyring
+    try:
+        gemini_key = keyring.get_password("cursor-king", "gemini_api_key")
+        settings["gemini_api_key"] = gemini_key or ""
+    except Exception as e:
+        logger.error(f"Failed to fetch Gemini API key from keyring: {e}", exc_info=True)
+        settings["gemini_api_key"] = ""
         
     return settings
-
+ 
 def save_settings(settings: Dict[str, Any]) -> None:
     """Saves settings to config.json and updates keyring/environment variables."""
     # Ensure config directory exists
@@ -51,26 +61,40 @@ def save_settings(settings: Dict[str, Any]) -> None:
         logger.error(f"Failed to create config directory {CONFIG_DIR}: {e}")
         return
 
-    # Extract API key to save separately via keyring
+    # Extract API keys to save separately via keyring
     api_key = settings.get("openai_api_key", "")
+    gemini_key = settings.get("gemini_api_key", "")
     
-    # Save password to keyring
+    # Save OpenAI API key to keyring
     try:
         if api_key:
             keyring.set_password("cursor-king", "openai_api_key", api_key)
             logger.info("OpenAI API key saved securely via keyring")
         else:
-            # Delete if exists
             try:
                 keyring.delete_password("cursor-king", "openai_api_key")
                 logger.info("OpenAI API key removed from keyring")
             except keyring.errors.PasswordDeleteError:
                 pass
     except Exception as e:
-        logger.error(f"Failed to save API key to keyring: {e}", exc_info=True)
+        logger.error(f"Failed to save OpenAI API key to keyring: {e}", exc_info=True)
 
-    # Filter out api key and build config to write to file
-    config_to_save = {k: v for k, v in settings.items() if k != "openai_api_key"}
+    # Save Gemini API key to keyring
+    try:
+        if gemini_key:
+            keyring.set_password("cursor-king", "gemini_api_key", gemini_key)
+            logger.info("Gemini API key saved securely via keyring")
+        else:
+            try:
+                keyring.delete_password("cursor-king", "gemini_api_key")
+                logger.info("Gemini API key removed from keyring")
+            except keyring.errors.PasswordDeleteError:
+                pass
+    except Exception as e:
+        logger.error(f"Failed to save Gemini API key to keyring: {e}", exc_info=True)
+
+    # Filter out api keys and build config to write to file
+    config_to_save = {k: v for k, v in settings.items() if k not in ["openai_api_key", "gemini_api_key"]}
     
     try:
         with open(CONFIG_FILE, "w") as f:
@@ -89,22 +113,25 @@ def apply_settings(settings: Dict[str, Any] = None) -> None:
         
     provider = settings.get("llm_provider", "copilot").lower()
     api_key = settings.get("openai_api_key", "")
+    gemini_key = settings.get("gemini_api_key", "")
     
     os.environ["LLM_PROVIDER"] = provider
+    os.environ["MODEL_NAME"] = settings.get("model_name", "gpt-4o-mini")
+    os.environ["USE_OMNIPARSER"] = str(settings.get("use_omniparser", False)).lower()
+    os.environ["USE_GPU"] = str(settings.get("use_gpu", False)).lower()
+    
     if api_key:
         os.environ["OPENAI_API_KEY"] = api_key
     elif "OPENAI_API_KEY" in os.environ:
         del os.environ["OPENAI_API_KEY"]
+
+    if gemini_key:
+        os.environ["GEMINI_API_KEY"] = gemini_key
+    elif "GEMINI_API_KEY" in os.environ:
+        del os.environ["GEMINI_API_KEY"]
     
-    # Also load Gemini API key from .env if provider is gemini
-    if provider == "gemini":
-        from dotenv import load_dotenv
-        load_dotenv()
-        gemini_key = os.getenv("GEMINI_API_KEY")
-        if gemini_key:
-            os.environ["GEMINI_API_KEY"] = gemini_key
-            logger.info(f"Applied settings: LLM_PROVIDER={provider}, GEMINI_API_KEY=***")
-        else:
-            logger.warning("Gemini provider selected but GEMINI_API_KEY not found in .env")
-    else:
-        logger.info(f"Applied settings: LLM_PROVIDER={provider}, OPENAI_API_KEY={'***' if api_key else 'None'}")
+    logger.info(
+        f"Applied settings: LLM_PROVIDER={provider}, MODEL_NAME={os.environ['MODEL_NAME']}, "
+        f"OPENAI_API_KEY={'***' if api_key else 'None'}, "
+        f"GEMINI_API_KEY={'***' if gemini_key else 'None'}"
+    )

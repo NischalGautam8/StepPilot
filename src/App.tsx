@@ -35,6 +35,10 @@ interface Settings {
   auto_advance: boolean;
   hotkey: string;
   openai_api_key: string;
+  gemini_api_key?: string;
+  use_omniparser: boolean;
+  use_gpu: boolean;
+  models_downloaded?: boolean;
 }
 
 interface HistoryItem {
@@ -67,12 +71,20 @@ function App() {
     show_debug_overlay: false,
     auto_advance: true,
     hotkey: "Ctrl+Alt+K",
-    openai_api_key: ""
+    openai_api_key: "",
+    gemini_api_key: "",
+    use_omniparser: false,
+    use_gpu: false,
+    models_downloaded: false
   });
   const [currentPlan, setCurrentPlan] = useState<any>(null);
   const [currentStepIndex, setCurrentStepIndex] = useState<number>(-1);
   const [taskHistory, setTaskHistory] = useState<HistoryItem[]>([]);
   const [saveSuccess, setSaveSuccess] = useState(false);
+  
+  // Model Download States
+  const [downloadProgress, setDownloadProgress] = useState<number | null>(null);
+  const [downloadStatus, setDownloadStatus] = useState<string>("");
   
   const wsRef = useRef<WebSocket | null>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
@@ -95,6 +107,10 @@ function App() {
         setSidecarStatus("running");
         addSystemMessage("WebSocket bridge to local FastAPI backend established.");
         
+        // Reset download progress to clear any stale stuck UI from a previous server session
+        setDownloadProgress(null);
+        setDownloadStatus("");
+        
         // Request settings on connect
         socket?.send(JSON.stringify({ type: "get_settings" }));
       };
@@ -111,6 +127,22 @@ function App() {
             addSystemMessage("✓ Settings saved successfully to keyring & config file.");
             setSaveSuccess(true);
             setTimeout(() => setSaveSuccess(false), 3000);
+          } else if (data.type === "download_progress") {
+            setDownloadProgress(data.percentage);
+            setDownloadStatus(data.status);
+            if (data.percentage === 100) {
+              addSystemMessage(`✓ ${data.status}`);
+              setTimeout(() => {
+                setDownloadProgress(null);
+                setDownloadStatus("");
+              }, 4000);
+            } else if (data.percentage === -1) {
+              addSystemMessage(`❌ ${data.status}`);
+              setTimeout(() => {
+                setDownloadProgress(null);
+                setDownloadStatus("");
+              }, 6000);
+            }
           } else if (data.type === "ack" && data.received === "task_start") {
             const plan = data.plan;
             if (plan && plan.steps && plan.steps.length > 0) {
@@ -437,6 +469,24 @@ function App() {
     }
   };
 
+  const handleDownloadModels = () => {
+    if (wsRef.current && wsStatus === "connected") {
+      setDownloadProgress(0);
+      setDownloadStatus("Starting download...");
+      wsRef.current.send(JSON.stringify({ type: "download_models" }));
+      addSystemMessage("Requested OmniParser model weights download from Hugging Face...");
+    } else {
+      addSystemMessage("Cannot start download: Backend WebSocket offline.");
+    }
+  };
+
+  const handleCancelDownload = () => {
+    if (wsRef.current && wsStatus === "connected") {
+      wsRef.current.send(JSON.stringify({ type: "cancel_download" }));
+      addSystemMessage("Cancelling OmniParser model download...");
+    }
+  };
+
   const progressPercent = currentPlan && currentPlan.steps && currentPlan.steps.length > 0
     ? Math.round(((currentStepIndex + 1) / currentPlan.steps.length) * 100)
     : 0;
@@ -733,10 +783,15 @@ function App() {
                     <select
                       className="settings-select"
                       value={settings.llm_provider}
-                      onChange={(e) => setSettings({ ...settings, llm_provider: e.target.value })}
+                      onChange={(e) => {
+                        const provider = e.target.value;
+                        const defaultModel = provider === "gemini" ? "gemini-3.5-flash" : "gpt-4o-mini";
+                        setSettings({ ...settings, llm_provider: provider, model_name: defaultModel });
+                      }}
                     >
                       <option value="copilot">GitHub Copilot SDK (Primary)</option>
                       <option value="openai">OpenAI API (Fallback)</option>
+                      <option value="gemini">Google Gemini AI</option>
                     </select>
                   </div>
 
@@ -747,21 +802,39 @@ function App() {
                       value={settings.model_name}
                       onChange={(e) => setSettings({ ...settings, model_name: e.target.value })}
                     >
-                      <optgroup label="Flagship Frontier Models">
-                        <option value="gpt-5.5">gpt-5.5 (Premier Frontier, Complex Reasoning)</option>
-                        <option value="gpt-5.4">gpt-5.4 (Flagship Professional, Reasoning & Tool Use)</option>
-                        <option value="gpt-5.2">gpt-5.2 (General Instructions & Coding)</option>
-                        <option value="gpt-5.1">gpt-5.1 (Coding & Agentic, Configurable Reasoning)</option>
-                        <option value="gpt-4o">gpt-4o (Legacy Vision Intelligent)</option>
-                      </optgroup>
-                      <optgroup label="Cost-Efficient & Mini Models">
-                        <option value="gpt-5.4-mini">gpt-5.4-mini (Strongest Mini for Subagents)</option>
-                        <option value="gpt-4o-mini">gpt-4o-mini (Fast, Multimodal Everyday)</option>
-                        <option value="gpt-5-mini">gpt-5-mini (Lightweight, Responsive Coding)</option>
-                        <option value="gpt-4.1-mini">gpt-4.1-mini (Specialized Instruction Follower)</option>
-                        <option value="gpt-4.1-nano">gpt-4.1-nano (Specialized High-Volume Batch)</option>
-                        <option value="gpt-5-nano">gpt-5-nano (Ultra-Efficient Scaled Workflows)</option>
-                      </optgroup>
+                      {settings.llm_provider === "gemini" ? (
+                        <>
+                          <optgroup label="Gemini 3.5 (Latest)">
+                            <option value="gemini-3.5-flash">gemini-3.5-flash (Frontier-class performance at low cost)</option>
+                          </optgroup>
+                          <optgroup label="Gemini 3.1 (Stable)">
+                            <option value="gemini-3.1-pro">gemini-3.1-pro (Google's most intelligent model for complex reasoning)</option>
+                            <option value="gemini-3.1-flash-lite">gemini-3.1-flash-lite (Optimized for speed and high-scale workloads)</option>
+                          </optgroup>
+                          <optgroup label="Gemini 2.5 (Legacy support)">
+                            <option value="gemini-2.5-pro">gemini-2.5-pro (Former flagship model widely used for production)</option>
+                            <option value="gemini-2.5-flash">gemini-2.5-flash (Fast, cost-efficient multimodal model)</option>
+                          </optgroup>
+                        </>
+                      ) : (
+                        <>
+                          <optgroup label="Flagship Frontier Models">
+                            <option value="gpt-5.5">gpt-5.5 (Premier Frontier, Complex Reasoning)</option>
+                            <option value="gpt-5.4">gpt-5.4 (Flagship Professional, Reasoning & Tool Use)</option>
+                            <option value="gpt-5.2">gpt-5.2 (General Instructions & Coding)</option>
+                            <option value="gpt-5.1">gpt-5.1 (Coding & Agentic, Configurable Reasoning)</option>
+                            <option value="gpt-4o">gpt-4o (Legacy Vision Intelligent)</option>
+                          </optgroup>
+                          <optgroup label="Cost-Efficient & Mini Models">
+                            <option value="gpt-5.4-mini">gpt-5.4-mini (Strongest Mini for Subagents)</option>
+                            <option value="gpt-4o-mini">gpt-4o-mini (Fast, Multimodal Everyday)</option>
+                            <option value="gpt-5-mini">gpt-5-mini (Lightweight, Responsive Coding)</option>
+                            <option value="gpt-4.1-mini">gpt-4.1-mini (Specialized Instruction Follower)</option>
+                            <option value="gpt-4.1-nano">gpt-4.1-nano (Specialized High-Volume Batch)</option>
+                            <option value="gpt-5-nano">gpt-5-nano (Ultra-Efficient Scaled Workflows)</option>
+                          </optgroup>
+                        </>
+                      )}
                     </select>
                   </div>
 
@@ -773,6 +846,18 @@ function App() {
                       placeholder={settings.openai_api_key ? "••••••••••••••••••••••••" : "Enter OpenAI API Key..."}
                       value={settings.openai_api_key}
                       onChange={(e) => setSettings({ ...settings, openai_api_key: e.target.value })}
+                    />
+                    <small className="field-help">API key is saved securely using the Windows Credential Manager.</small>
+                  </div>
+
+                  <div className="settings-field">
+                    <label className="field-label">Gemini API Key</label>
+                    <input
+                      type="password"
+                      className="settings-input"
+                      placeholder={settings.gemini_api_key ? "••••••••••••••••••••••••" : "Enter Gemini API Key..."}
+                      value={settings.gemini_api_key || ""}
+                      onChange={(e) => setSettings({ ...settings, gemini_api_key: e.target.value })}
                     />
                     <small className="field-help">API key is saved securely using the Windows Credential Manager.</small>
                   </div>
@@ -813,6 +898,145 @@ function App() {
                         <span className="checkbox-desc">Automatically steps forward when click tracker detects a click in target bounding box.</span>
                       </div>
                     </label>
+
+                    <label className="checkbox-container">
+                      <input
+                        type="checkbox"
+                        checked={settings.use_omniparser || false}
+                        onChange={(e) => setSettings({ ...settings, use_omniparser: e.target.checked })}
+                      />
+                      <span className="checkbox-custom"></span>
+                      <div className="checkbox-text">
+                        <span className="checkbox-title">Enable OmniParser Icon Detection</span>
+                        <span className="checkbox-desc">Enables visual icon & button detection (YOLOv8 + Florence-2) alongside OCR & UIA.</span>
+                      </div>
+                    </label>
+
+                    <label className="checkbox-container">
+                      <input
+                        type="checkbox"
+                        checked={settings.use_gpu || false}
+                        onChange={(e) => setSettings({ ...settings, use_gpu: e.target.checked })}
+                      />
+                      <span className="checkbox-custom"></span>
+                      <div className="checkbox-text">
+                        <span className="checkbox-title">Use CUDA GPU Acceleration</span>
+                        <span className="checkbox-desc">Enables CUDA acceleration for OmniParser inference (requires compatible NVIDIA GPU & CUDA).</span>
+                      </div>
+                    </label>
+
+                    {settings.use_omniparser && (
+                      <div className="model-download-section" style={{
+                        marginTop: "16px",
+                        padding: "16px",
+                        background: "rgba(255, 255, 255, 0.03)",
+                        border: "1px dashed rgba(255, 255, 255, 0.15)",
+                        borderRadius: "8px",
+                        display: "flex",
+                        flexDirection: "column",
+                        gap: "10px"
+                      }}>
+                        <span className="checkbox-title" style={{ fontSize: "14px", fontWeight: "600", display: "flex", alignItems: "center", gap: "6px" }}>
+                          📦 OmniParser Weights & Models (YOLOv8 + Florence-2)
+                        </span>
+                        <span className="checkbox-desc" style={{ fontSize: "12px", color: "var(--text-secondary)", lineHeight: "1.4" }}>
+                          Real-world visual processing requires downloading model weights (~490MB total). Once downloaded, the application works fully offline.
+                        </span>
+                        
+                        {downloadProgress === null ? (
+                          settings.models_downloaded ? (
+                            <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+                              <span style={{ color: "#10b981", fontSize: "13px", fontWeight: "500", display: "flex", alignItems: "center", gap: "6px" }}>
+                                ✓ Models fully downloaded and ready for offline use.
+                              </span>
+                              <button
+                                type="button"
+                                className="nav-button"
+                                style={{
+                                  width: "max-content",
+                                  alignSelf: "flex-start",
+                                  background: "rgba(255, 255, 255, 0.05)",
+                                  color: "var(--text-secondary)",
+                                  border: "1px solid rgba(255, 255, 255, 0.1)",
+                                  padding: "6px 12px",
+                                  borderRadius: "4px",
+                                  cursor: "pointer",
+                                  fontSize: "12px",
+                                  fontWeight: "500"
+                                }}
+                                onClick={handleDownloadModels}
+                              >
+                                Re-verify / Download Again
+                              </button>
+                            </div>
+                          ) : (
+                            <button
+                              type="button"
+                              className="nav-button active"
+                              style={{ 
+                                width: "max-content", 
+                                alignSelf: "flex-start", 
+                                display: "flex", 
+                                alignItems: "center", 
+                                gap: "6px", 
+                                background: "var(--accent-primary)", 
+                                color: "white", 
+                                padding: "8px 16px",
+                                cursor: "pointer",
+                                borderRadius: "6px"
+                              }}
+                              onClick={handleDownloadModels}
+                            >
+                              Download Models Now
+                            </button>
+                          )
+                        ) : (
+                          <div className="download-progress-container" style={{ width: "100%" }}>
+                            <div className="download-progress-info" style={{ display: "flex", justifyContent: "space-between", fontSize: "13px", marginBottom: "4px" }}>
+                              <span style={{ color: "var(--text-secondary)" }}>{downloadStatus}</span>
+                              <strong style={{ color: "var(--accent-primary)" }}>{downloadProgress >= 0 ? `${downloadProgress}%` : ""}</strong>
+                            </div>
+                            {downloadProgress >= 0 && downloadProgress < 100 && (
+                              <div className="progress-bar-container" style={{ background: "rgba(255, 255, 255, 0.1)", height: "8px", borderRadius: "4px", overflow: "hidden", position: "relative", marginBottom: "10px" }}>
+                                <div className="progress-bar-fill" style={{
+                                  width: `${downloadProgress}%`,
+                                  background: "var(--accent-primary)",
+                                  height: "100%",
+                                  transition: "width 0.25s ease"
+                                }}></div>
+                              </div>
+                            )}
+                            {downloadProgress >= 0 && downloadProgress < 100 && (
+                              <button
+                                type="button"
+                                className="nav-button"
+                                style={{
+                                  background: "rgba(239, 68, 68, 0.15)",
+                                  color: "#ef4444",
+                                  border: "1px solid rgba(239, 68, 68, 0.3)",
+                                  padding: "6px 12px",
+                                  borderRadius: "4px",
+                                  cursor: "pointer",
+                                  fontSize: "12px",
+                                  fontWeight: "500",
+                                  marginTop: "4px",
+                                  transition: "all 0.2s"
+                                }}
+                                onClick={handleCancelDownload}
+                                onMouseEnter={(e) => {
+                                  e.currentTarget.style.background = "rgba(239, 68, 68, 0.25)";
+                                }}
+                                onMouseLeave={(e) => {
+                                  e.currentTarget.style.background = "rgba(239, 68, 68, 0.15)";
+                                }}
+                              >
+                                Cancel Download
+                              </button>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
 
                   <button type="submit" className="save-settings-button">

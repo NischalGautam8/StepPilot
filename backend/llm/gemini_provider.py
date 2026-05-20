@@ -40,8 +40,12 @@ class GeminiProvider(LLMProvider):
     ) -> str:
         self._ensure_configured()
         try:
-            # Use gemini-1.5-flash for fast text completion
-            model = genai.GenerativeModel('gemini-1.5-flash')
+            # Resolve model name dynamically from env
+            model_name = os.getenv("MODEL_NAME", "gemini-3.5-flash")
+            if not model_name.startswith("gemini-"):
+                model_name = "gemini-3.5-flash"
+                
+            model = genai.GenerativeModel(model_name)
             
             # Combine system prompt and user prompt
             full_prompt = prompt
@@ -52,7 +56,7 @@ class GeminiProvider(LLMProvider):
             if json_mode:
                 full_prompt += "\n\nRespond with valid JSON only."
             
-            logger.info("Executing Gemini text completion request using gemini-1.5-flash...")
+            logger.info(f"Executing Gemini text completion request using {model_name}...")
             
             generation_config = genai.types.GenerationConfig(
                 temperature=temperature,
@@ -80,8 +84,12 @@ class GeminiProvider(LLMProvider):
     ) -> str:
         self._ensure_configured()
         try:
-            # Use gemini-1.5-pro for vision tasks
-            model = genai.GenerativeModel('gemini-1.5-pro')
+            # Resolve model name dynamically from env
+            model_name = os.getenv("MODEL_NAME", "gemini-3.5-flash")
+            if not model_name.startswith("gemini-"):
+                model_name = "gemini-3.5-flash"
+                
+            model = genai.GenerativeModel(model_name)
             
             # Combine system prompt and user prompt
             full_prompt = prompt
@@ -92,7 +100,7 @@ class GeminiProvider(LLMProvider):
             if json_mode:
                 full_prompt += "\n\nRespond with valid JSON only."
             
-            logger.info("Executing Gemini vision request using gemini-1.5-pro...")
+            logger.info(f"Executing Gemini vision request using {model_name}...")
             
             # Convert image bytes to PIL Image for Gemini
             from PIL import Image
@@ -123,14 +131,19 @@ class GeminiProvider(LLMProvider):
     ) -> AsyncGenerator[str, None]:
         self._ensure_configured()
         try:
-            model = genai.GenerativeModel('gemini-1.5-flash')
+            # Resolve model name dynamically from env
+            model_name = os.getenv("MODEL_NAME", "gemini-3.5-flash")
+            if not model_name.startswith("gemini-"):
+                model_name = "gemini-3.5-flash"
+                
+            model = genai.GenerativeModel(model_name)
             
             # Combine system prompt and user prompt
             full_prompt = prompt
             if system_prompt:
                 full_prompt = f"{system_prompt}\n\n{prompt}"
             
-            logger.info("Executing Gemini streaming chat request...")
+            logger.info(f"Executing Gemini streaming chat request using {model_name}...")
             
             generation_config = genai.types.GenerationConfig(
                 temperature=temperature,

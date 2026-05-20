@@ -160,7 +160,9 @@ async def handle_get_settings(message: dict, client_id: str):
     """Handle get_settings message from frontend and return current settings"""
     try:
         from core.settings_manager import load_settings
+        from vision.ui_detector import check_models_exist
         settings = load_settings()
+        settings["models_downloaded"] = check_models_exist()
         await ws_manager.send_message({
             "type": "settings_data",
             "settings": settings
@@ -175,11 +177,17 @@ async def handle_save_settings(message: dict, client_id: str):
     """Handle save_settings message from frontend and update config"""
     try:
         from core.settings_manager import save_settings
+        from vision.ui_detector import check_models_exist
         settings = message.get("settings", {})
+        # Pop models_downloaded so we don't save it to file
+        settings.pop("models_downloaded", None)
         save_settings(settings)
+        
+        settings["models_downloaded"] = check_models_exist()
         await ws_manager.send_message({
             "type": "settings_saved",
-            "status": "success"
+            "status": "success",
+            "settings": settings
         }, client_id)
         logger.info(f"Saved settings updated by client: {client_id}")
     except Exception as e:
@@ -213,6 +221,81 @@ async def handle_step_result(message: dict, client_id: str):
         logger.error(f"Error handling step_result: {e}", exc_info=True)
 
 
+async def handle_download_models(message: dict, client_id: str):
+    """Handle model download request from frontend"""
+    global screen_parser
+    try:
+        import asyncio
+        from vision.screen_parser import ScreenParser
+        from vision.ui_detector import UIDetector
+        
+        if screen_parser is None:
+            screen_parser = ScreenParser()
+            
+        if screen_parser.ui_detector is None:
+            screen_parser.ui_detector = UIDetector(use_gpu=screen_parser.use_gpu)
+            
+        detector = screen_parser.ui_detector
+        loop = asyncio.get_running_loop()
+        
+        # Define progress callback to send websocket progress events
+        def progress_callback(percentage: float, status_msg: str):
+            try:
+                asyncio.run_coroutine_threadsafe(
+                    ws_manager.send_message({
+                        "type": "download_progress",
+                        "percentage": percentage,
+                        "status": status_msg
+                    }, client_id),
+                    loop
+                )
+            except Exception as ex:
+                logger.error(f"Error sending download progress: {ex}")
+
+        logger.info(f"Client '{client_id}' triggered OmniParser models download.")
+        
+        # Run download pipeline in background thread
+        success = await asyncio.to_thread(detector.download_models, progress_callback)
+        logger.info(f"OmniParser model download completed: {success}")
+        
+        # Send latest settings state to sync frontend with the new downloaded status
+        from core.settings_manager import load_settings
+        from vision.ui_detector import check_models_exist
+        settings = load_settings()
+        settings["models_downloaded"] = check_models_exist()
+        await ws_manager.send_message({
+            "type": "settings_data",
+            "settings": settings
+        }, client_id)
+        
+    except Exception as e:
+        logger.error(f"Error executing download_models: {e}", exc_info=True)
+        await ws_manager.send_error(f"Model download error: {str(e)}", client_id)
+
+
+async def handle_cancel_download(message: dict, client_id: str):
+    """Handle request from frontend to cancel an active model download"""
+    global screen_parser
+    try:
+        if screen_parser and screen_parser.ui_detector:
+            screen_parser.ui_detector.cancel_download()
+            logger.info(f"Client '{client_id}' requested cancellation of model download.")
+            await ws_manager.send_message({
+                "type": "download_progress",
+                "percentage": -1.0,
+                "status": "Download cancelled by user."
+            }, client_id)
+        else:
+            logger.warning("Cancel download requested but no active detector/parser found.")
+            await ws_manager.send_message({
+                "type": "download_progress",
+                "percentage": -1.0,
+                "status": "No active download running."
+            }, client_id)
+    except Exception as e:
+        logger.error(f"Error executing cancel_download: {e}", exc_info=True)
+
+
 # Register message handlers
 ws_manager.register_handler(MessageType.SCREENSHOT, handle_screenshot)
 ws_manager.register_handler(MessageType.TASK_START, handle_task_start)
@@ -220,6 +303,8 @@ ws_manager.register_handler(MessageType.CURSOR_POS, handle_cursor_pos)
 ws_manager.register_handler("get_settings", handle_get_settings)
 ws_manager.register_handler("save_settings", handle_save_settings)
 ws_manager.register_handler("step_result", handle_step_result)
+ws_manager.register_handler("download_models", handle_download_models)
+ws_manager.register_handler("cancel_download", handle_cancel_download)
 
 
 @app.get("/health")

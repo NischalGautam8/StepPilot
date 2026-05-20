@@ -66,9 +66,9 @@ class ElementMerger:
         inner_area = w1 * h1
         return inter_area / inner_area if inner_area > 0 else 0.0
 
-    def merge(self, ocr_elements: list[dict], a11y_elements: list[dict]) -> list[dict]:
+    def merge(self, ocr_elements: list[dict], a11y_elements: list[dict], icon_elements: list[dict] = None) -> list[dict]:
         """
-        Combines OCR texts and Accessibility controls.
+        Combines OCR texts, Accessibility controls, and OmniParser icons.
         
         Rules:
         - If an OCR text element overlaps (IoU > iou_threshold) or is highly contained (>80%) 
@@ -78,6 +78,10 @@ class ElementMerger:
           - Set source as "merged"
         - Unmerged A11y elements are kept with source "a11y"
         - Unmerged OCR elements are kept with type "Text" and source "ocr"
+        - Deduplicate OmniParser icons:
+          - If an icon overlaps with an existing merged/a11y/ocr element, it is considered a duplicate.
+          - If the duplicate element was only OCR-based, we enrich it with the icon type/caption.
+          - Non-overlapping icons are kept with type "Icon" and source "omniparser".
         - All final elements get a unique sequential string ID starting with "elem_"
         """
         merged_list = []
@@ -146,6 +150,48 @@ class ElementMerger:
                     "enabled": True,
                     "automation_id": ""
                 })
+
+        # Add OmniParser icons with deduplication
+        if icon_elements:
+            logger.info(f"Merging {len(icon_elements)} OmniParser icons into base list...")
+            for icon in icon_elements:
+                is_duplicate = False
+                for existing in merged_list:
+                    iou = self.compute_iou(icon["bbox"], existing["bbox"])
+                    containment1 = self.compute_containment(icon["bbox"], existing["bbox"])
+                    containment2 = self.compute_containment(existing["bbox"], icon["bbox"])
+                    
+                    # Calculate area ratio to prevent matching tiny icons with huge parent windows/panels
+                    area_icon = icon["bbox"][2] * icon["bbox"][3]
+                    area_existing = existing["bbox"][2] * existing["bbox"][3]
+                    size_ratio = max(area_icon, area_existing) / min(area_icon, area_existing) if min(area_icon, area_existing) > 0 else 9999
+                    
+                    # Merge only if they have high overlap OR are contained and comparable in size (< 5x size difference)
+                    if iou > self.iou_threshold or (containment1 > 0.8 and size_ratio < 5.0) or (containment2 > 0.8 and size_ratio < 5.0):
+                        is_duplicate = True
+                        # If existing is raw OCR, upgrade it to an icon/merged element with the caption
+                        if existing["source"] == "ocr":
+                            existing["type"] = "Icon"
+                            existing["source"] = "merged"
+                            if not existing["text"] or existing["text"].strip().lower() in ["text", "icon", ""]:
+                                existing["text"] = icon["text"]
+                        # If existing is a11y control, upgrade it to merged and enrich with caption if needed
+                        elif existing["source"] == "a11y":
+                            existing["source"] = "merged"
+                            if not existing["text"] or existing["text"].strip().lower() in ["button", "text", "icon", ""]:
+                                existing["text"] = icon["text"]
+                        break
+                
+                if not is_duplicate:
+                    merged_list.append({
+                        "type": "Icon",
+                        "text": icon["text"],
+                        "bbox": icon["bbox"],
+                        "confidence": icon["confidence"],
+                        "source": "omniparser",
+                        "enabled": True,
+                        "automation_id": ""
+                    })
                 
         # Assign unique element IDs
         final_elements = []
