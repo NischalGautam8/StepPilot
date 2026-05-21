@@ -19,7 +19,10 @@ class ScreenParser:
     and handles cache/privacy filtering.
     """
     def __init__(self, use_gpu: bool = False, det_db_thresh: float = 0.3, iou_threshold: float = 0.7, max_a11y_depth: int = 6):
-        self.ocr_engine = OCREngine(use_gpu=use_gpu, det_db_thresh=det_db_thresh)
+        # OCR engine is created lazily — PaddleOCR is never loaded unless OCR is actually needed
+        self._ocr_engine = None
+        self._use_gpu = use_gpu
+        self._det_db_thresh = det_db_thresh
         self.a11y_reader = A11yReader(max_depth=max_a11y_depth)
         self.merger = ElementMerger(iou_threshold=iou_threshold)
         
@@ -31,6 +34,14 @@ class ScreenParser:
         self.cache_elements = None
         self.cache_time = 0.0
         self.cache_hwnd = 0
+    
+    @property
+    def ocr_engine(self):
+        """Lazy-create OCR engine on first access to avoid loading PaddleOCR at startup."""
+        if self._ocr_engine is None:
+            logger.info("Creating OCREngine on first use...")
+            self._ocr_engine = OCREngine(use_gpu=self._use_gpu, det_db_thresh=self._det_db_thresh)
+        return self._ocr_engine
 
     @staticmethod
     def enhance_contrast(image_np: np.ndarray) -> np.ndarray:
@@ -104,12 +115,15 @@ class ScreenParser:
             logger.warning(f"Failed to crop to active window: {e}. Using full screenshot.")
             x1, y1, x2, y2 = 0, 0, img_w, img_h
             
-        # 2. Contrast enhancement
-        enhanced = self.enhance_contrast(image_np)
+        # 2. Skip contrast enhancement for desktop screenshots — they have crisp text
+        # on solid backgrounds, so CLAHE just wastes CPU cycles.
+        # Only enable for unusual scenarios (e.g., remote desktop, dark themes)
+        # enhanced = self.enhance_contrast(image_np)
+        enhanced = image_np
         
-        # 3. Resize maintaining aspect ratio
+        # 3. Resize maintaining aspect ratio (960x540 is sufficient for desktop OCR)
         h, w = enhanced.shape[:2]
-        max_w, max_h = 1280, 720
+        max_w, max_h = 960, 540
         scale = min(max_w / w, max_h / h)
         
         if scale < 1.0:
@@ -181,9 +195,10 @@ class ScreenParser:
             logger.error(f"Error in OCR preprocessed pipeline: {e}", exc_info=True)
             return []
 
-    def run_ui_detector_on_preprocessed(self, preprocessed_np: np.ndarray, crop_bounds: tuple[int, int, int, int]) -> list[dict]:
+    def run_ui_detector_on_preprocessed(self, preprocessed_np: np.ndarray, crop_bounds: tuple[int, int, int, int], existing_elements: list[dict] = None) -> list[dict]:
         """
         Runs OmniParser icon detection on preprocessed image and maps coordinates back to absolute screen space.
+        Uses existing_elements to avoid captioning icons that overlap with text/labeled components.
         """
         if self.ui_detector is None:
             from vision.ui_detector import UIDetector
@@ -200,8 +215,28 @@ class ScreenParser:
             scale_x = crop_w / float(prep_w)
             scale_y = crop_h / float(prep_h)
             
-            # Detect icons on the preprocessed image
-            raw_icons = self.ui_detector.detect_icons(preprocessed_np)
+            # Map existing absolute-space elements back to preprocessed space
+            mapped_existing = []
+            if existing_elements:
+                for elem in existing_elements:
+                    eb = elem.get("bbox", [0, 0, 0, 0])
+                    rx = eb[0] - x1
+                    ry = eb[1] - y1
+                    rw = eb[2]
+                    rh = eb[3]
+                    
+                    px = rx / scale_x if scale_x > 0 else rx
+                    py = ry / scale_y if scale_y > 0 else ry
+                    pw = rw / scale_x if scale_x > 0 else rw
+                    ph = rh / scale_y if scale_y > 0 else rh
+                    
+                    mapped_existing.append({
+                        "text": elem.get("text") or elem.get("name") or "",
+                        "bbox": [px, py, pw, ph]
+                    })
+            
+            # Detect icons on the preprocessed image with mapped existing elements
+            raw_icons = self.ui_detector.detect_icons(preprocessed_np, existing_elements=mapped_existing)
             
             scaled_results = []
             for item in raw_icons:
@@ -233,8 +268,14 @@ class ScreenParser:
 
     async def parse_screen(self, preprocessed_np: np.ndarray, crop_bounds: tuple[int, int, int, int]) -> list[dict]:
         """
-        Parses screenshot by running OCR and A11y in parallel, caching results.
+        Parses screenshot using A11y-first strategy for near-instant results.
+        
+        OCR Strategy (controlled by OCR_MODE env var):
+        - "auto" (default): Run A11y first. Only run OCR if A11y returns < 10 elements.
+        - "always": Always run both A11y and OCR (slow but thorough).
+        - "never": Only use A11y tree, skip OCR entirely (fastest).
         """
+        total_t0 = time.time()
         hwnd = win32gui.GetForegroundWindow()
         current_time = time.time()
         
@@ -250,33 +291,73 @@ class ScreenParser:
         orig_w = 1920
         orig_h = 1080
         try:
-            # Safely resolve screen size using win32gui or defaults
             desktop_hwnd = win32gui.GetDesktopWindow()
             _, _, dw, dh = win32gui.GetWindowRect(desktop_hwnd)
             orig_w, orig_h = dw, dh
         except Exception:
             pass
-            
-        # Run sweeps sequentially on the main thread to prevent C++ multithreading/COM crashes
-        ocr_results = self.run_ocr_on_preprocessed(preprocessed_np, crop_bounds)
-        a11y_results = self.a11y_reader.get_active_window_elements(orig_w, orig_h)
         
+        ocr_mode = os.getenv("OCR_MODE", "auto").lower()
+        
+        # ── Stage 1: Accessibility Tree (fast, ~200-800ms) ──
+        t0 = time.time()
+        a11y_results = self.a11y_reader.get_active_window_elements(orig_w, orig_h)
+        a11y_ms = (time.time() - t0) * 1000
+        logger.info(f"[TIMING] A11y tree: {a11y_ms:.0f}ms → {len(a11y_results)} elements")
+        
+        # ── Stage 2: OCR (conditional, can be slow) ──
+        ocr_results = []
+        should_run_ocr = False
+        
+        if ocr_mode == "always":
+            should_run_ocr = True
+        elif ocr_mode == "never":
+            should_run_ocr = False
+        else:  # "auto" — only run OCR if A11y didn't find enough
+            # If the A11y tree has enough interactive elements, skip OCR entirely.
+            # Desktop apps with proper accessibility (Chrome, VS Code, Explorer, etc.)
+            # typically expose 50-200+ UIA elements. If we got < 10, the app likely
+            # has poor accessibility and OCR is needed as a fallback.
+            MIN_A11Y_ELEMENTS = 10
+            if len(a11y_results) < MIN_A11Y_ELEMENTS:
+                should_run_ocr = True
+                logger.info(f"A11y returned only {len(a11y_results)} elements (< {MIN_A11Y_ELEMENTS}). Falling back to OCR...")
+            else:
+                logger.info(f"A11y returned {len(a11y_results)} elements. Skipping OCR (sufficient coverage).")
+        
+        if should_run_ocr:
+            t0 = time.time()
+            ocr_results = self.run_ocr_on_preprocessed(preprocessed_np, crop_bounds)
+            ocr_ms = (time.time() - t0) * 1000
+            logger.info(f"[TIMING] OCR: {ocr_ms:.0f}ms → {len(ocr_results)} elements")
+        
+        # ── Stage 3: OmniParser Icon Detection (conditional) ──
         use_omniparser = os.getenv("USE_OMNIPARSER", "false").lower() == "true"
         icon_results = []
         if use_omniparser:
+            t0 = time.time()
             logger.info("OmniParser is enabled. Running icon detection...")
-            icon_results = self.run_ui_detector_on_preprocessed(preprocessed_np, crop_bounds)
+            existing = ocr_results + a11y_results
+            icon_results = self.run_ui_detector_on_preprocessed(preprocessed_np, crop_bounds, existing)
+            omni_ms = (time.time() - t0) * 1000
+            logger.info(f"[TIMING] OmniParser: {omni_ms:.0f}ms → {len(icon_results)} icons")
         
-        # Merge elements (three-way merge)
+        # ── Stage 4: Merge & Finalize ──
+        t0 = time.time()
         unified_elements = self.merger.merge(ocr_results, a11y_results, icon_results)
-        
-        # Privacy redaction filter
         unified_elements = self.redact_sensitive_data(unified_elements)
+        merge_ms = (time.time() - t0) * 1000
         
         # Cache results
         self.cache_elements = unified_elements
         self.cache_time = current_time
         self.cache_hwnd = hwnd
         
-        logger.info(f"Screen parsing complete. Extracted {len(unified_elements)} final UIElements.")
+        total_ms = (time.time() - total_t0) * 1000
+        logger.info(
+            f"[TIMING] Screen parsing complete in {total_ms:.0f}ms. "
+            f"Extracted {len(unified_elements)} UIElements "
+            f"(a11y={len(a11y_results)}, ocr={len(ocr_results)}, icons={len(icon_results)}, merge={merge_ms:.0f}ms)"
+        )
         return unified_elements
+

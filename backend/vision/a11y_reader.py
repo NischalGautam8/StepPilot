@@ -42,20 +42,22 @@ class A11yReader:
         try:
             desktop = Desktop(backend="uia")
             
-            def traverse(element, depth=0, max_depth_override=None):
+            def traverse(info, depth=0, max_depth_override=None):
                 limit = max_depth_override if max_depth_override is not None else self.max_depth
                 if depth > limit:
                     return
                 
                 try:
-                    info = element.element_info
                     rect = info.rectangle
-                    
                     if rect:
                         x = rect.left
                         y = rect.top
                         w = rect.width()
                         h = rect.height()
+                        
+                        # Prune search early if the element is completely off-screen.
+                        if x >= display_width or y >= display_height or (x + w) <= 0 or (y + h) <= 0:
+                            return
                         
                         # Ensure element has non-zero size
                         if w > 0 and h > 0:
@@ -63,42 +65,36 @@ class A11yReader:
                             name = info.name or ""
                             automation_id = info.automation_id or ""
                             
-                            # Fetch enabled state safely
+                            # Skip slow COM call for is_enabled() since it is not used for agent serialization
                             enabled = True
-                            try:
-                                enabled = element.is_enabled()
-                            except Exception:
-                                pass
                                 
-                            # Filter to only keep elements that overlap or reside within display bounds
-                            if x < display_width and y < display_height and (x + w) > 0 and (y + h) > 0:
-                                elements.append({
-                                    "type": control_type,
-                                    "name": name,
-                                    "bbox": [x, y, w, h],
-                                    "enabled": enabled,
-                                    "automation_id": automation_id
-                                })
+                            elements.append({
+                                "type": control_type,
+                                "name": name,
+                                "bbox": [x, y, w, h],
+                                "enabled": enabled,
+                                "automation_id": automation_id
+                            })
                 except Exception:
                     pass
                     
                 try:
-                    for child in element.children():
+                    for child in info.children():
                         traverse(child, depth + 1, max_depth_override)
                 except Exception:
                     pass
 
-            # 1. Sweep active foreground window UIA tree
+            # 1. Sweep active foreground window UIA tree using element_info directly
             active_window = desktop.window(handle=hwnd)
-            traverse(active_window)
+            traverse(active_window.element_info)
             
             # 2. Sweep Windows Taskbar explicitly to extract running shortcuts & pinned icons
             if taskbar_hwnd and taskbar_hwnd != hwnd:
                 logger.info(f"Inspecting taskbar UIA tree: [HWND {taskbar_hwnd}]")
                 try:
                     taskbar_window = desktop.window(handle=taskbar_hwnd)
-                    # Use a depth of 6 to traverse taskbar icons, MSTaskListClass, and system tray safely
-                    traverse(taskbar_window, max_depth_override=6)
+                    # Use a depth of 3 to traverse taskbar icons and pinned shortcuts safely
+                    traverse(taskbar_window.element_info, max_depth_override=3)
                 except Exception as te:
                     logger.debug(f"Taskbar UIA sweep skipped: {te}")
 

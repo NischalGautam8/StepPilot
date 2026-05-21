@@ -33,14 +33,37 @@ class OCREngine:
         try:
             from paddleocr import PaddleOCR
             logger.info("Initializing PaddleOCR (use_gpu=%s, det_db_thresh=%s)...", self.use_gpu, self.det_db_thresh)
+            
+            # Use PP-OCRv4 explicitly — PP-OCRv5 (default) hardcodes the slow
+            # "PP-OCRv5_server_det" model (~3-5x slower than mobile).
+            # PP-OCRv4 uses "PP-OCRv4_mobile_det" + "en_PP-OCRv4_mobile_rec" which
+            # are much faster and more than accurate enough for crisp desktop UI text.
             self.ocr = PaddleOCR(
                 lang="en",
+                ocr_version="PP-OCRv4",
                 device="gpu" if self.use_gpu else "cpu",
                 text_det_thresh=self.det_db_thresh,
-                enable_mkldnn=False
+                text_det_limit_side_len=960,
+                text_recognition_batch_size=16,
+                use_doc_orientation_classify=False,
+                use_doc_unwarping=False,
+                use_textline_orientation=False,
+                enable_mkldnn=False,
             )
             self._initialized = True
-            logger.info("PaddleOCR initialized successfully.")
+            logger.info("PaddleOCR initialized successfully. Running warmup inference...")
+            
+            # Warmup: run a tiny dummy image through the pipeline to trigger
+            # PaddlePaddle's JIT compilation now, instead of stalling on the
+            # first real screenshot.
+            try:
+                dummy = np.zeros((64, 200, 3), dtype=np.uint8)
+                cv2.putText(dummy, "warmup", (10, 40), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 2)
+                self.ocr.ocr(dummy, cls=False)
+                logger.info("PaddleOCR warmup complete.")
+            except Exception as we:
+                logger.debug(f"PaddleOCR warmup call failed (non-fatal): {we}")
+                
         except Exception as e:
             logger.error(f"Failed to initialize PaddleOCR: {e}", exc_info=True)
             self.ocr = None
@@ -59,7 +82,7 @@ class OCREngine:
             # Run OCR on the image
             # PaddleOCR expects a numpy array (BGR or RGB) or file path
             try:
-                results = self.ocr.ocr(image_np, cls=True)
+                results = self.ocr.ocr(image_np, cls=False)
             except TypeError:
                 results = self.ocr.ocr(image_np)
             

@@ -98,6 +98,8 @@ function App() {
   
   const wsRef = useRef<WebSocket | null>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
+  const settingsRef = useRef(settings);
+  settingsRef.current = settings;
 
   // Setup WebSocket connection to local FastAPI backend
   useEffect(() => {
@@ -179,12 +181,12 @@ function App() {
             
             addAssistantMessage(`Proposed Action: ${actionDesc}\nReasoning: "${action.thought}"`);
             
-            if (settings.execution_mode === "yolo") {
+            if (settingsRef.current.execution_mode === "yolo") {
               if (socket && socket.readyState === WebSocket.OPEN) {
                 socket.send(JSON.stringify({ type: "agent_step_execute", action }));
               }
               setAgentProposedAction(null);
-            } else if (settings.execution_mode === "autonomous") {
+            } else if (settingsRef.current.execution_mode === "autonomous") {
               setCountdown(1.5);
             }
           } else if (data.type === "agent_finished") {

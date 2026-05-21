@@ -45,13 +45,12 @@ class GeminiProvider(LLMProvider):
             if not model_name.startswith("gemini-"):
                 model_name = "gemini-3.5-flash"
                 
-            model = genai.GenerativeModel(model_name)
+            model = genai.GenerativeModel(
+                model_name=model_name,
+                system_instruction=system_prompt
+            )
             
-            # Combine system prompt and user prompt
             full_prompt = prompt
-            if system_prompt:
-                full_prompt = f"{system_prompt}\n\n{prompt}"
-            
             # Add JSON instruction if needed
             if json_mode:
                 full_prompt += "\n\nRespond with valid JSON only."
@@ -61,6 +60,7 @@ class GeminiProvider(LLMProvider):
             generation_config = genai.types.GenerationConfig(
                 temperature=temperature,
                 max_output_tokens=8192,
+                response_mime_type="application/json" if json_mode else None
             )
             
             response = model.generate_content(
@@ -89,13 +89,12 @@ class GeminiProvider(LLMProvider):
             if not model_name.startswith("gemini-"):
                 model_name = "gemini-3.5-flash"
                 
-            model = genai.GenerativeModel(model_name)
+            model = genai.GenerativeModel(
+                model_name=model_name,
+                system_instruction=system_prompt
+            )
             
-            # Combine system prompt and user prompt
             full_prompt = prompt
-            if system_prompt:
-                full_prompt = f"{system_prompt}\n\n{prompt}"
-            
             # Add JSON instruction if needed
             if json_mode:
                 full_prompt += "\n\nRespond with valid JSON only."
@@ -110,6 +109,7 @@ class GeminiProvider(LLMProvider):
             generation_config = genai.types.GenerationConfig(
                 temperature=temperature,
                 max_output_tokens=8192,
+                response_mime_type="application/json" if json_mode else None
             )
             
             response = model.generate_content(
@@ -136,13 +136,12 @@ class GeminiProvider(LLMProvider):
             if not model_name.startswith("gemini-"):
                 model_name = "gemini-3.5-flash"
                 
-            model = genai.GenerativeModel(model_name)
+            model = genai.GenerativeModel(
+                model_name=model_name,
+                system_instruction=system_prompt
+            )
             
-            # Combine system prompt and user prompt
             full_prompt = prompt
-            if system_prompt:
-                full_prompt = f"{system_prompt}\n\n{prompt}"
-            
             logger.info(f"Executing Gemini streaming chat request using {model_name}...")
             
             generation_config = genai.types.GenerationConfig(
