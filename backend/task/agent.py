@@ -54,9 +54,10 @@ Examples of Tool Calls:
 {"thought": "The Notepad file is saved. Task is complete.", "tool": "finish", "args": {"success": true, "message": "Successfully typed Hello World in Notepad."}}
 
 Important Rules:
-- Return ONLY the raw JSON object, without markdown formatting blocks.
+- Return ONLY the raw JSON object, without conversational text or explanation.
 - Ensure the coordinates are valid numbers and inside the bounding boxes of the visible UI elements.
 - Only propose one tool call at a time.
+- CRITICAL: Do NOT write Python code, scripts, selenium automation, or write programming tutorial explanations. You are not a coding assistant. You are an executor acting on the screen. Propose ONLY the next direct UI action to execute in JSON format.
 """
 
 AGENT_PROMPT_TEMPLATE = """Task Query: "{query}"
@@ -68,6 +69,7 @@ Currently Visible UI Elements:
 {elements_str}
 
 Analyze the state, determine the next correct action, and output it in strict JSON.
+CRITICAL: Do NOT write Python scripts, Selenium code, or explain how to write program code. You must output ONLY a valid tool call JSON matching the requested action schema (with "thought", "tool", and "args" keys).
 """
 
 class Agent:
@@ -183,7 +185,17 @@ class Agent:
                 if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
                     cleaned_response = cleaned_response[start_idx:end_idx + 1]
 
-            action_data = json.loads(cleaned_response)
+            # Try parsing direct block first, then fallback to structural scanning
+            try:
+                action_data = json.loads(cleaned_response)
+            except json.JSONDecodeError:
+                # Secondary scan: find first '{' and last '}' inside raw_response
+                start_idx = raw_response.find("{")
+                end_idx = raw_response.rfind("}")
+                if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
+                    action_data = json.loads(raw_response[start_idx:end_idx + 1])
+                else:
+                    raise
             
             # Basic validation
             if "tool" not in action_data:

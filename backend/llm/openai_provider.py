@@ -52,7 +52,7 @@ class OpenAIProvider(LLMProvider):
                 model=model_name,
                 messages=messages,
                 temperature=temperature,
-                response_format={"type": "json_object"} if (json_mode and (not self.base_url or "api.openai.com" in self.base_url)) else None
+                response_format={"type": "json_object"} if json_mode else None
             )
             return response.choices[0].message.content or ""
         except Exception as e:
@@ -95,7 +95,7 @@ class OpenAIProvider(LLMProvider):
                 model=model_name,
                 messages=messages,
                 temperature=temperature,
-                response_format={"type": "json_object"} if (json_mode and (not self.base_url or "api.openai.com" in self.base_url)) else None
+                response_format={"type": "json_object"} if json_mode else None
             )
             return response.choices[0].message.content or ""
         except Exception as e:
