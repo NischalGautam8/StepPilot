@@ -1,0 +1,172 @@
+@import url('https://fonts.googleapis.com/css2?family=Albert+Sans:wght@300;400;600;700;800;900&family=Bricolage+Grotesque:opsz,wght@12..96,300..800&family=Hanken+Grotesk:wght@300;400;600;700&family=JetBrains+Mono:wght@300;400;500;700&display=swap');
+@import "tailwindcss";
+
+/* Hallmark · pre-emit critique: P5 H5 E5 S5 R5 V5 */
+/* Hallmark · genre: playful · macrostructure: Marquee Hero · theme: brutal · enrichment: none · nav: N7 · footer: Ft8 */
+
+:root {
+  --color-paper:    oklch(98%  0.001 0);
+  --color-paper-2:  oklch(95%  0.002 0);
+  --color-paper-3:  oklch(91%  0.003 0);
+  --color-rule:     oklch(12%  0.005 0);
+  --color-rule-2:   oklch(8%   0.005 0);
+  --color-muted:    oklch(38%  0.005 0);
+  --color-neutral:  oklch(22%  0.005 0);
+  --color-ink-2:    oklch(12%  0.005 0);
+  --color-ink:      oklch(8%   0.005 0);
+  --color-accent:   #E63946;
+  --color-accent-ink: oklch(58% 0.24 25);
+  --color-focus:    #E63946;
+
+  --font-display: "Bricolage Grotesque", "Albert Sans", ui-sans-serif, sans-serif;
+  --font-body:    "Albert Sans", "Hanken Grotesk", ui-sans-serif, sans-serif;
+  --font-serif:   "Albert Sans", ui-sans-serif, sans-serif;
+  --font-label:   "JetBrains Mono", ui-monospace, monospace;
+  --font-mono:    "JetBrains Mono", ui-monospace, monospace;
+
+  --display-weight: 800;
+  --display-soft: 0;
+
+  --text-display:   clamp(3.0rem, 7vw + 1.0rem, 7.5rem);
+  --text-display-s: clamp(2.0rem, 4vw + 1rem, 3.5rem);
+  --text-2xl: 2.75rem;
+  --text-xl:  2rem;
+  --text-lg:  1.5rem;
+
+  --tracking-display: -0.04em;
+  --tracking-tight:   -0.02em;
+  --tracking-label:   0.04em;
+
+  --lh-tight: 1.02;
+  --lh-snug:  1.08;
+
+  --section-gap: 5.5rem;
+  --section-head-gap: 1.25rem;
+
+  --rule-hair: 1px;
+  --rule-fine: 3px;
+  --measure: 58ch;
+
+  --space-3xs: 0.125rem;
+  --space-2xs: 0.25rem;
+  --space-xs:  0.5rem;
+  --space-sm:  0.75rem;
+  --space-md:  1rem;
+  --space-lg:  1.5rem;
+  --space-xl:  2.5rem;
+  --space-2xl: 4rem;
+  --space-3xl: 6.5rem;
+  --space-4xl: 10rem;
+}
+
+@theme {
+  --color-paper: var(--color-paper);
+  --color-paper-2: var(--color-paper-2);
+  --color-paper-3: var(--color-paper-3);
+  --color-rule: var(--color-rule);
+  --color-rule-2: var(--color-rule-2);
+  --color-muted: var(--color-muted);
+  --color-neutral: var(--color-neutral);
+  --color-ink-2: var(--color-ink-2);
+  --color-ink: var(--color-ink);
+  --color-accent: var(--color-accent);
+  --color-accent-ink: var(--color-accent-ink);
+  --color-focus: var(--color-focus);
+
+  --font-display: var(--font-display);
+  --font-body: var(--font-body);
+  --font-serif: var(--font-serif);
+  --font-label: var(--font-label);
+  --font-mono: var(--font-mono);
+}
+
+body {
+  background-color: var(--color-paper);
+  color: var(--color-ink);
+  font-family: var(--font-body);
+  margin: 0;
+  overflow-x: clip;
+}
+
+html {
+  overflow-x: clip;
+}
+
+/* Custom Microinteractions & States */
+.btn-brutal {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.8rem 1.6rem;
+  background-color: var(--color-accent);
+  color: #fff;
+  border: 3px solid var(--color-ink);
+  font-family: var(--font-display);
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-label);
+  box-shadow: 4px 4px 0px var(--color-ink);
+  transition: transform 150ms cubic-bezier(0.16, 1, 0.3, 1), box-shadow 150ms cubic-bezier(0.16, 1, 0.3, 1);
+  cursor: pointer;
+}
+.btn-brutal:hover {
+  transform: translate(-2px, -2px);
+  box-shadow: 6px 6px 0px var(--color-ink);
+}
+.btn-brutal:active {
+  transform: translate(2px, 2px);
+  box-shadow: 2px 2px 0px var(--color-ink);
+}
+
+.btn-brutal-secondary {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.8rem 1.6rem;
+  background-color: var(--color-paper);
+  color: var(--color-ink);
+  border: 3px solid var(--color-ink);
+  font-family: var(--font-display);
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-label);
+  box-shadow: 4px 4px 0px var(--color-ink);
+  transition: transform 150ms cubic-bezier(0.16, 1, 0.3, 1), box-shadow 150ms cubic-bezier(0.16, 1, 0.3, 1);
+  cursor: pointer;
+}
+.btn-brutal-secondary:hover {
+  transform: translate(-2px, -2px);
+  box-shadow: 6px 6px 0px var(--color-ink);
+  background-color: var(--color-paper-2);
+}
+.btn-brutal-secondary:active {
+  transform: translate(2px, 2px);
+  box-shadow: 2px 2px 0px var(--color-ink);
+}
+
+/* Card styles */
+.card-brutal {
+  background-color: var(--color-paper);
+  border: 3px solid var(--color-ink);
+  box-shadow: 6px 6px 0px var(--color-ink);
+  transition: transform 150ms cubic-bezier(0.16, 1, 0.3, 1), box-shadow 150ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+.card-brutal:hover {
+  transform: translate(-2px, -2px);
+  box-shadow: 8px 8px 0px var(--color-ink);
+}
+
+/* Marquee infinite scroll keyframe */
+@keyframes foot-marquee {
+  from { transform: translateX(0); }
+  to { transform: translateX(-50%); }
+}
+
+.animate-marquee {
+  animation: foot-marquee 24s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .animate-marquee {
+    animation: none;
+  }
+}
