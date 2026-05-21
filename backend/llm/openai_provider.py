@@ -48,12 +48,20 @@ class OpenAIProvider(LLMProvider):
 
             model_name = os.getenv("MODEL_NAME", "gpt-4o-mini")
             logger.info(f"Executing OpenAI text completion request using {model_name}...")
-            response = await self.client.chat.completions.create(
-                model=model_name,
-                messages=messages,
-                temperature=temperature,
-                response_format={"type": "json_object"} if json_mode else None
-            )
+            
+            # Only use json_object response_format with native OpenAI API.
+            # NVIDIA NIM and other providers don't support it and may error.
+            is_native_openai = not self.base_url or "openai.com" in (self.base_url or "")
+            kwargs = {
+                "model": model_name,
+                "messages": messages,
+                "temperature": temperature,
+                "max_tokens": 300,
+            }
+            if json_mode and is_native_openai:
+                kwargs["response_format"] = {"type": "json_object"}
+            
+            response = await self.client.chat.completions.create(**kwargs)
             return response.choices[0].message.content or ""
         except Exception as e:
             logger.error(f"OpenAI complete call failed: {e}", exc_info=True)
@@ -91,12 +99,18 @@ class OpenAIProvider(LLMProvider):
 
             model_name = os.getenv("MODEL_NAME", "gpt-4o")
             logger.info(f"Executing OpenAI vision request using {model_name}...")
-            response = await self.client.chat.completions.create(
-                model=model_name,
-                messages=messages,
-                temperature=temperature,
-                response_format={"type": "json_object"} if json_mode else None
-            )
+            
+            is_native_openai = not self.base_url or "openai.com" in (self.base_url or "")
+            kwargs = {
+                "model": model_name,
+                "messages": messages,
+                "temperature": temperature,
+                "max_tokens": 300,
+            }
+            if json_mode and is_native_openai:
+                kwargs["response_format"] = {"type": "json_object"}
+            
+            response = await self.client.chat.completions.create(**kwargs)
             return response.choices[0].message.content or ""
         except Exception as e:
             logger.error(f"OpenAI vision complete call failed: {e}", exc_info=True)

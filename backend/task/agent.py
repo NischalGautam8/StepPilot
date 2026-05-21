@@ -6,71 +6,42 @@ from llm.orchestrator import LLMOrchestrator
 
 logger = logging.getLogger("cursor-king-backend.agent")
 
-SYSTEM_PROMPT = """You are the AI Agent executor for StepPilot, a production-grade local-first desktop automation assistant.
-Your goal is to complete the user's task on their Windows PC by generating a single next action using one of the available tools.
+SYSTEM_PROMPT = """You are a desktop automation agent. You control a Windows PC by outputting ONE JSON tool call at a time.
 
-You are given:
-1. The overall user task query.
-2. The history of actions executed so far, including tool calls and their results.
-3. A serialized list of UI elements currently visible on the screen in the format: ID:ControlType"Text"(x,y,w,h) where (x,y) is the top-left and (w,h) is the width and height of the bounding box.
+Available tools:
+- click(x, y, button): Click at (x,y). button: "left", "right", "double".
+- type_text(text): Type text at cursor position.
+- key_press(keys): Press key combo, e.g. "enter", "ctrl+c", "win".
+- scroll(x, y, direction, amount): Scroll at (x,y). direction: "up"/"down".
+- wait(seconds): Wait for UI to update.
+- finish(success, message): Task is done.
 
-You have access to the following tools:
-- click(x, y, button): Click at coordinates (x, y). button is "left", "right" or "double" (for double click).
-- type_text(text): Type the specified text at the current cursor position.
-- key_press(keys): Press a key or key combination (e.g. 'enter', 'tab', 'ctrl+c', 'alt+f4').
-- scroll(x, y, direction, amount): Move cursor to (x, y) and scroll in 'direction' ('up' or 'down') by 'amount' clicks.
-- wait(seconds): Pause execution for a few seconds to let the UI update.
-- read_screen(): Take a fresh screenshot and parse the visible UI elements to update the screen state. Use this tool when you expect the screen content has changed (e.g. after opening a new window, typing a search query, clicking a button that navigates, etc.) to see the new layout.
-- finish(success, message): End the execution when the task is fully complete. success is a boolean, and message is a summary of the outcome.
+Output format - ONLY output this JSON, nothing else:
+{"thought": "brief reason", "tool": "tool_name", "args": {"key": "value"}}
 
-To make progress:
-- Analyze the current screen elements and matching text/controls.
-- Compare them against the history of steps taken.
-- Identify the coordinates of the target element. To click an element, click at its center: (x_center = x + w/2, y_center = y + h/2).
-- Propose exactly one tool call at a time.
+Example for opening Notepad:
+Step 1: {"thought": "Press Win to open Start menu", "tool": "key_press", "args": {"keys": "win"}}
+Step 2: {"thought": "Start menu is open. Type notepad to search", "tool": "type_text", "args": {"text": "notepad"}}
+Step 3: {"thought": "Notepad app appeared in search results. Click it.", "tool": "click", "args": {"x": 200, "y": 300, "button": "left"}}
+Step 4: {"thought": "Notepad is now open. Type the text.", "tool": "type_text", "args": {"text": "Hello World"}}
+Step 5: {"thought": "Task complete.", "tool": "finish", "args": {"success": true, "message": "Typed Hello World in Notepad"}}
 
-You must output a strict JSON object with:
-- thought: A brief explanation of your reasoning (what you see, what you want to achieve).
-- tool: The name of the tool to call ("click", "type_text", "key_press", "scroll", "wait", "read_screen", or "finish").
-- args: A dictionary of arguments matching the tool definition (empty dictionary for read_screen).
-
-Examples of Tool Calls:
-1. Click at center of element "22:Button"Submit"(100,200,80,30)":
-{"thought": "I need to submit the form, so I will click the 'Submit' button.", "tool": "click", "args": {"x": 140, "y": 215, "button": "left"}}
-
-2. Type text:
-{"thought": "Typing the text 'Hello World' in the active text field.", "tool": "type_text", "args": {"text": "Hello World"}}
-
-3. Press Enter key:
-{"thought": "Pressing enter to execute the command.", "tool": "key_press", "args": {"keys": "enter"}}
-
-4. Scroll down at center of window:
-{"thought": "Scrolling down to reveal more items.", "tool": "scroll", "args": {"x": 960, "y": 540, "direction": "down", "amount": 3}}
-
-5. Read screen to update layout:
-{"thought": "Since I just typed a search query, the screen layout has changed. I will read the screen to find the search results.", "tool": "read_screen", "args": {}}
-
-6. Conclude task:
-{"thought": "The Notepad file is saved. Task is complete.", "tool": "finish", "args": {"success": true, "message": "Successfully typed Hello World in Notepad."}}
-
-Important Rules:
-- Return ONLY the raw JSON object, without conversational text or explanation.
-- Ensure the coordinates are valid numbers and inside the bounding boxes of the visible UI elements.
-- Only propose one tool call at a time.
-- CRITICAL: Do NOT write Python code, scripts, selenium automation, or write programming tutorial explanations. You are not a coding assistant. You are an executor acting on the screen. Propose ONLY the next direct UI action to execute in JSON format.
+CRITICAL RULES:
+- Output ONLY the JSON object. No explanation, no code, no markdown.
+- NEVER repeat the same action twice. Check history first.
+- To click an element at (x,y,w,h), click its center: (x+w/2, y+h/2).
+- The screen elements update after each action. Use CURRENT elements only.
 """
 
-AGENT_PROMPT_TEMPLATE = """Task Query: "{query}"
+AGENT_PROMPT_TEMPLATE = """Task: "{query}"
 
-Action Execution History:
+History:
 {history_str}
 
-Currently Visible UI Elements:
+Current UI Elements:
 {elements_str}
 
-Analyze the state, determine the next correct action, and output it in strict JSON.
-CRITICAL: Do NOT write Python scripts, Selenium code, or explain how to write program code. You must output ONLY a valid tool call JSON matching the requested action schema (with "thought", "tool", and "args" keys).
-"""
+Output the next action as a single JSON object. ONLY JSON, nothing else."""
 
 class Agent:
     """
@@ -178,24 +149,53 @@ class Agent:
                 cleaned_response = cleaned_response[:-3]
             cleaned_response = cleaned_response.strip()
 
-            # Attempt to extract JSON if it is wrapped in conversational text
-            if not (cleaned_response.startswith("{") and cleaned_response.endswith("}")):
-                start_idx = cleaned_response.find("{")
-                end_idx = cleaned_response.rfind("}")
-                if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
-                    cleaned_response = cleaned_response[start_idx:end_idx + 1]
+            # Attempt to extract JSON using brace-matching parser for maximum robustness
+            def extract_json_objects(text: str) -> list[dict]:
+                results = []
+                n = len(text)
+                for i in range(n):
+                    if text[i] == '{':
+                        brace_count = 0
+                        for j in range(i, n):
+                            if text[j] == '{':
+                                brace_count += 1
+                            elif text[j] == '}':
+                                brace_count -= 1
+                                if brace_count == 0:
+                                    candidate = text[i:j+1]
+                                    try:
+                                        obj = json.loads(candidate)
+                                        if isinstance(obj, dict):
+                                            results.append(obj)
+                                    except json.JSONDecodeError:
+                                        pass
+                                    break
+                return results
 
-            # Try parsing direct block first, then fallback to structural scanning
+            action_data = None
             try:
                 action_data = json.loads(cleaned_response)
             except json.JSONDecodeError:
-                # Secondary scan: find first '{' and last '}' inside raw_response
+                pass
+
+            if action_data is None or not isinstance(action_data, dict):
+                candidates = extract_json_objects(raw_response)
+                # Prioritize candidates starting from the end of response
+                for cand in reversed(candidates):
+                    if "tool" in cand:
+                        action_data = cand
+                        break
+                if action_data is None and candidates:
+                    action_data = candidates[-1]
+
+            if action_data is None:
+                # Fallback to simple scan
                 start_idx = raw_response.find("{")
                 end_idx = raw_response.rfind("}")
                 if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
                     action_data = json.loads(raw_response[start_idx:end_idx + 1])
                 else:
-                    raise
+                    raise ValueError("No valid JSON object found in response")
             
             # Basic validation
             if "tool" not in action_data:

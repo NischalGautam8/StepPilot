@@ -18,7 +18,8 @@ DEFAULT_SETTINGS = {
     "use_omniparser": False,
     "use_gpu": False,
     "execution_mode": "supervised",
-    "openai_base_url": ""
+    "openai_base_url": "",
+    "ocr_mode": "auto"  # "auto" = A11y-first (skip OCR if enough elements), "always", "never"
 }
 
 def load_settings() -> Dict[str, Any]:
@@ -123,6 +124,7 @@ def apply_settings(settings: Dict[str, Any] = None) -> None:
     os.environ["USE_OMNIPARSER"] = str(settings.get("use_omniparser", False)).lower()
     os.environ["USE_GPU"] = str(settings.get("use_gpu", False)).lower()
     os.environ["EXECUTION_MODE"] = settings.get("execution_mode", "supervised").lower()
+    os.environ["OCR_MODE"] = settings.get("ocr_mode", "auto").lower()
     
     if api_key:
         os.environ["OPENAI_API_KEY"] = api_key

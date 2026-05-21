@@ -392,6 +392,41 @@ async def handle_agent_step_execute(message: dict, client_id: str):
         
         logger.info(f"Executing agent step: tool={tool}, args={args}")
         
+        # ── Repeat-action guard ──
+        # Detect when the LLM proposes the exact same action as the last one
+        # (e.g. key_press("win") twice in a row). This prevents toggle loops
+        # like repeatedly opening/closing the Start menu.
+        if agent_history:
+            last = agent_history[-1]
+            if last.get("tool") == tool and last.get("args") == args and tool not in ("wait", "read_screen", "finish"):
+                logger.warning(
+                    f"BLOCKED repeat action: {tool}({args}) was already the last executed action. "
+                    f"Forcing screen re-read instead to break the loop."
+                )
+                # Force a fresh screen capture so the LLM gets updated state
+                screen_parser.cache_elements = None
+                elements = await capture_and_parse_screen()
+                
+                agent_history.append({
+                    "tool": "read_screen",
+                    "args": {},
+                    "result": f"auto-triggered: blocked repeat {tool}. Found {len(elements)} elements"
+                })
+                
+                next_action = await agent_executor.get_next_action(
+                    query=current_task_query,
+                    elements=elements,
+                    history=agent_history,
+                    image_bytes=last_screenshot_bytes
+                )
+                
+                await ws_manager.send_message({
+                    "type": "agent_action_proposed",
+                    "action": next_action,
+                    "history": agent_history
+                }, client_id)
+                return
+        
         if tool == "finish":
             is_agent_running = False
             result_str = "task completed"
@@ -460,12 +495,26 @@ async def handle_agent_step_execute(message: dict, client_id: str):
             "result": result_str
         })
         
-        # If the tool executed was read_screen, the screen state has already been updated.
-        # Otherwise, we DO NOT automatically capture/parse the screen. We use cached elements.
+        # Always re-read the screen after state-changing actions so the LLM
+        # sees the current UI state. Without this, the agent reuses stale cached
+        # elements and repeats actions (e.g. pressing Win key twice, typing text
+        # twice) because it doesn't see the screen has already changed.
         if tool == "read_screen":
-            # elements was already populated during execution above
+            # Screen was already captured during execution above
             pass
+        elif tool in ("click", "type_text", "key_press", "scroll"):
+            # Brief delay to let the OS render UI changes (Start menu appearing,
+            # text being typed, window focus changing, etc.)
+            import asyncio
+            await asyncio.sleep(0.5)
+            
+            # Invalidate cache and capture fresh screen state
+            screen_parser.cache_elements = None
+            logger.info(f"Auto-refreshing screen after '{tool}' action...")
+            elements = await capture_and_parse_screen()
+            result_str += f" | screen refreshed: {len(elements)} elements"
         else:
+            # For wait and other non-UI actions, use cached elements
             elements = last_parsed_elements
             
         # Get next action proposal from LLM

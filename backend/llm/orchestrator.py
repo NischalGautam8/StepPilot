@@ -10,7 +10,7 @@ from llm.gemini_provider import GeminiProvider
 logger = logging.getLogger("cursor-king-backend.llm-orchestrator")
 
 # Timeout and retry configuration
-LLM_TIMEOUT_SECONDS = 15
+LLM_TIMEOUT_SECONDS = 45
 MAX_RETRIES = 3
 RETRY_DELAYS = [1, 2, 4]  # Exponential backoff: 1s, 2s, 4s
 

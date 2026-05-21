@@ -130,9 +130,55 @@ class UIDetector:
             logger.error(f"Failed to initialize OmniParser V2 models: {e}", exc_info=True)
             self.has_dependencies = False  # Force fallback on failure
 
-    def detect_icons(self, image_np: np.ndarray) -> List[Dict[str, Any]]:
+    @staticmethod
+    def _compute_iou(box1: list[float], box2: list[float]) -> float:
+        x1, y1, w1, h1 = box1
+        x2, y2, w2, h2 = box2
+        
+        x1_min, y1_min, x1_max, y1_max = x1, y1, x1 + w1, y1 + h1
+        x2_min, y2_min, x2_max, y2_max = x2, y2, x2 + w2, y2 + h2
+        
+        inter_left = max(x1_min, x2_min)
+        inter_top = max(y1_min, y2_min)
+        inter_right = min(x1_max, x2_max)
+        inter_bottom = min(y1_max, y2_max)
+        
+        inter_w = max(0.0, inter_right - inter_left)
+        inter_h = max(0.0, inter_bottom - inter_top)
+        inter_area = inter_w * inter_h
+        
+        if inter_area == 0:
+            return 0.0
+            
+        area1 = w1 * h1
+        area2 = w2 * h2
+        union_area = area1 + area2 - inter_area
+        return inter_area / union_area if union_area > 0 else 0.0
+
+    @staticmethod
+    def _compute_containment(inner_box: list[float], outer_box: list[float]) -> float:
+        x1, y1, w1, h1 = inner_box
+        x2, y2, w2, h2 = outer_box
+        
+        x1_min, y1_min, x1_max, y1_max = x1, y1, x1 + w1, y1 + h1
+        x2_min, y2_min, x2_max, y2_max = x2, y2, x2 + w2, y2 + h2
+        
+        inter_left = max(x1_min, x2_min)
+        inter_top = max(y1_min, y2_min)
+        inter_right = min(x1_max, x2_max)
+        inter_bottom = min(y1_max, y2_max)
+        
+        inter_w = max(0.0, inter_right - inter_left)
+        inter_h = max(0.0, inter_bottom - inter_top)
+        inter_area = inter_w * inter_h
+        
+        inner_area = w1 * h1
+        return inter_area / inner_area if inner_area > 0 else 0.0
+
+    def detect_icons(self, image_np: np.ndarray, existing_elements: List[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
         """
         Runs OmniParser icon detection and captioning pipeline.
+        Optionally uses existing_elements to avoid captioning icons that overlap with descriptive text.
         Returns elements: [{"type": "icon", "bbox": [x, y, w, h], "text": str, "confidence": float, "source": "omniparser"}]
         """
         # Ensure models are loaded
@@ -160,7 +206,8 @@ class UIDetector:
             import torch
             from PIL import Image
             
-            # 2. For each detected box, crop and caption with Florence-2
+            # 2. Compile list of icon proposals and check overlaps with existing elements
+            icon_proposals = []
             for box in boxes:
                 # Get bbox in xyxy
                 xyxy = box.xyxy[0].tolist()
@@ -177,19 +224,68 @@ class UIDetector:
                 # Crop the icon image
                 if w < 5 or h < 5:
                     continue
+                
+                icon_box = [x1, y1, w, h]
+                
+                # Check overlap against existing elements (OCR & UIA) to skip unnecessary captions
+                needs_caption = True
+                if existing_elements:
+                    for existing in existing_elements:
+                        existing_box = existing["bbox"]
+                        iou = self._compute_iou(icon_box, existing_box)
+                        containment1 = self._compute_containment(icon_box, existing_box)
+                        containment2 = self._compute_containment(existing_box, icon_box)
+                        
+                        # Calculate area ratio to prevent matching tiny icons with huge parent windows
+                        area_icon = w * h
+                        area_existing = existing_box[2] * existing_box[3]
+                        size_ratio = max(area_icon, area_existing) / min(area_icon, area_existing) if min(area_icon, area_existing) > 0 else 9999
+                        
+                        # If it overlaps significantly, check if the existing element already has descriptive text
+                        if iou > 0.7 or (containment1 > 0.8 and size_ratio < 5.0) or (containment2 > 0.8 and size_ratio < 5.0):
+                            existing_text = (existing.get("text") or "").strip().lower()
+                            # If it has descriptive text, we don't need to run Florence-2 captioning!
+                            if existing_text and existing_text not in ["button", "icon", "text", "image", ""]:
+                                needs_caption = False
+                                break
+                                
+                icon_proposals.append({
+                    "bbox": icon_box,
+                    "confidence": conf,
+                    "needs_caption": needs_caption,
+                    "caption": "button"  # Default fallback
+                })
+                
+            # 3. Crop and batch caption the icons that actually need captions
+            images_to_caption = []
+            indices_needing_caption = []
+            
+            for idx, proposal in enumerate(icon_proposals):
+                if proposal["needs_caption"]:
+                    x1, y1, w, h = proposal["bbox"]
+                    cropped_bgr = image_np[y1:y1+h, x1:x1+w]
+                    cropped_rgb = cv2.cvtColor(cropped_bgr, cv2.COLOR_BGR2RGB)
+                    pil_crop = Image.fromarray(cropped_rgb)
+                    images_to_caption.append(pil_crop)
+                    indices_needing_caption.append(idx)
                     
-                cropped_bgr = image_np[y1:y2, x1:x2]
-                cropped_rgb = cv2.cvtColor(cropped_bgr, cv2.COLOR_BGR2RGB)
-                pil_crop = Image.fromarray(cropped_rgb)
+            if images_to_caption:
+                logger.info(f"Running Florence-2 batched captioning on {len(images_to_caption)} / {len(icon_proposals)} icons...")
+                captions = self._caption_icons_batched(images_to_caption)
+                for i, caption in enumerate(captions):
+                    target_idx = indices_needing_caption[i]
+                    icon_proposals[target_idx]["caption"] = caption
+            else:
+                logger.info("All detected icons were skipped or resolved using existing overlapping elements.")
                 
-                # Caption icon using Florence-2
-                caption = self._caption_icon(pil_crop)
-                
+            # 4. Construct final detected icons
+            for proposal in icon_proposals:
+                x1, y1, w, h = proposal["bbox"]
                 detected_icons.append({
                     "type": "icon",
-                    "text": caption,
+                    "text": proposal["caption"],
                     "bbox": [x1, y1, w, h],
-                    "confidence": conf,
+                    "confidence": proposal["confidence"],
                     "source": "omniparser",
                     "enabled": True,
                     "automation_id": ""
@@ -202,6 +298,48 @@ class UIDetector:
         except Exception as e:
             logger.error(f"Error during real OmniParser inference: {e}", exc_info=True)
             return self._run_mock_detector(image_np)
+
+    def _caption_icons_batched(self, pil_images: List) -> List[str]:
+        """Helper to generate captions for a batch of icons using Florence-2."""
+        if not pil_images:
+            return []
+        try:
+            import torch
+            device = self.florence_model.device
+            prompt = "<CAPTION>"
+            
+            # Process all images in a batch
+            inputs = self.florence_processor(
+                text=[prompt] * len(pil_images),
+                images=pil_images,
+                return_tensors="pt",
+                padding=True
+            ).to(device)
+            
+            # Ensure float16 or float32 based on device
+            if device.type == "cuda":
+                inputs = {k: v.to(torch.float16) if v.dtype == torch.float32 else v for k, v in inputs.items()}
+                
+            generated_ids = self.florence_model.generate(
+                input_ids=inputs["input_ids"],
+                pixel_values=inputs["pixel_values"],
+                max_new_tokens=32,
+                num_beams=3
+            )
+            
+            generated_texts = self.florence_processor.batch_decode(generated_ids, skip_special_tokens=True)
+            
+            captions = []
+            for text in generated_texts:
+                caption = text.strip().lower()
+                # If the caption is empty or generic, fall back to "button"
+                if not caption or caption in ["image", "icon", "logo"]:
+                    caption = "button"
+                captions.append(caption)
+            return captions
+        except Exception as e:
+            logger.debug(f"Florence-2 batched captioning failed: {e}")
+            return ["icon"] * len(pil_images)
 
     def _caption_icon(self, pil_image) -> str:
         """Helper to generate a caption for an icon using Florence-2."""
