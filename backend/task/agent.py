@@ -106,10 +106,14 @@ class Agent:
             elements_str=elements_str
         )
 
-        # Smart Vision Toggle decision logic
+        # Smart Vision Toggle — only use vision if the model supports it.
+        # Text-only models (llama-3.3-70b, deepseek-v3, etc.) will error
+        # if sent image data. The A11y tree provides all necessary UI info.
+        model_name = os.getenv("MODEL_NAME", "")
+        is_vision_model = "vision" in model_name.lower()
+        
         use_vision = False
-        if image_bytes:
-            # Force vision on start, or if history is sparse, or if average OCR confidence is low
+        if image_bytes and is_vision_model:
             ocr_elements = [e for e in elements if e.get("source") == "ocr"]
             avg_confidence = 1.0
             if ocr_elements:

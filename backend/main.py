@@ -356,6 +356,10 @@ async def handle_agent_start(message: dict, client_id: str):
         
         # Force a fresh capture and parse on start
         elements = await capture_and_parse_screen()
+        
+        if not is_agent_running:
+            logger.info("Agent task start aborted by user.")
+            return
             
         # Get first action
         next_action = await agent_executor.get_next_action(
@@ -365,6 +369,10 @@ async def handle_agent_start(message: dict, client_id: str):
             image_bytes=last_screenshot_bytes
         )
         
+        if not is_agent_running:
+            logger.info("Agent task start aborted by user while querying LLM.")
+            return
+            
         await ws_manager.send_message({
             "type": "agent_action_proposed",
             "action": next_action,
@@ -517,6 +525,10 @@ async def handle_agent_step_execute(message: dict, client_id: str):
             # For wait and other non-UI actions, use cached elements
             elements = last_parsed_elements
             
+        if not is_agent_running:
+            logger.info("Agent execution was aborted. Stopping step execution.")
+            return
+
         # Get next action proposal from LLM
         next_action = await agent_executor.get_next_action(
             query=current_task_query,
@@ -525,6 +537,10 @@ async def handle_agent_step_execute(message: dict, client_id: str):
             image_bytes=last_screenshot_bytes
         )
         
+        if not is_agent_running:
+            logger.info("Agent execution was aborted. Suppressing next action proposal.")
+            return
+            
         # Send proposed action to frontend
         await ws_manager.send_message({
             "type": "agent_action_proposed",
