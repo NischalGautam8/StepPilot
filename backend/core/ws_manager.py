@@ -22,6 +22,8 @@ class MessageType:
     ACK = "ack"
     PING = "ping"
     PONG = "pong"
+    DOWNLOAD_MODELS = "download_models"
+    DOWNLOAD_PROGRESS = "download_progress"
 
 
 class WsConnectionManager:

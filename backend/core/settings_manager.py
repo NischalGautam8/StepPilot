@@ -16,7 +16,8 @@ DEFAULT_SETTINGS = {
     "auto_advance": True,
     "hotkey": "Ctrl+Alt+K",
     "use_omniparser": False,
-    "use_gpu": False
+    "use_gpu": False,
+    "omniparser_models_downloaded": False
 }
 
 def load_settings() -> Dict[str, Any]:

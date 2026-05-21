@@ -300,6 +300,57 @@ async def handle_cancel_download(message: dict, client_id: str):
 ws_manager.register_handler(MessageType.SCREENSHOT, handle_screenshot)
 ws_manager.register_handler(MessageType.TASK_START, handle_task_start)
 ws_manager.register_handler(MessageType.CURSOR_POS, handle_cursor_pos)
+
+
+async def handle_download_models(message: dict, client_id: str):
+    """Handle OmniParser model download request"""
+    try:
+        logger.info("Starting OmniParser model download...")
+        
+        from vision.omniparser_detector import OmniParserDetector
+        
+        def progress_callback(current, total, status):
+            """Send progress updates to client"""
+            asyncio.create_task(ws_manager.send_message({
+                "type": MessageType.DOWNLOAD_PROGRESS,
+                "current": current,
+                "total": total,
+                "status": status
+            }, client_id))
+        
+        # Download models
+        success = OmniParserDetector.download_models(progress_callback)
+        
+        if success:
+            # Update settings
+            from core.settings_manager import load_settings, save_settings
+            settings = load_settings()
+            settings["omniparser_models_downloaded"] = True
+            save_settings(settings)
+            
+            await ws_manager.send_message({
+                "type": MessageType.ACK,
+                "received": "download_models",
+                "success": True,
+                "message": "OmniParser models downloaded successfully"
+            }, client_id)
+        else:
+            await ws_manager.send_error(
+                "Failed to download OmniParser models",
+                client_id,
+                code="MODEL_DOWNLOAD_ERROR"
+            )
+            
+    except Exception as e:
+        logger.error(f"Error downloading models: {e}", exc_info=True)
+        await ws_manager.send_error(
+            f"Model download error: {str(e)}",
+            client_id,
+            code="MODEL_DOWNLOAD_ERROR"
+        )
+
+
+ws_manager.register_handler(MessageType.DOWNLOAD_MODELS, handle_download_models)
 ws_manager.register_handler("get_settings", handle_get_settings)
 ws_manager.register_handler("save_settings", handle_save_settings)
 ws_manager.register_handler("step_result", handle_step_result)
