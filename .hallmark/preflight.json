@@ -1,0 +1,10 @@
+{
+  "date": "2026-05-21",
+  "findings": {
+    "font_stack": "Albert Sans + JetBrains Mono (custom Google Fonts import)",
+    "palette": "Brutal oklch custom variables",
+    "motion": "CSS animations + inline transition classes",
+    "spacing": "Custom CSS variables mapped in @theme",
+    "framework": "React 19 + Vite 8 + Tailwind CSS v4"
+  }
+}
