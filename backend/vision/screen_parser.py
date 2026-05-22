@@ -86,34 +86,39 @@ class ScreenParser:
             logger.info(f"Redacted {redacted_count} elements containing potentially sensitive keywords.")
         return elements
 
-    def preprocess_image(self, image_np: np.ndarray) -> tuple[np.ndarray, tuple[int, int, int, int]]:
+    def preprocess_image(self, image_np: np.ndarray, skip_crop: bool = False) -> tuple[np.ndarray, tuple[int, int, int, int]]:
         """
         Crops screenshot to foreground window bounds, enhances contrast, and resizes to max 1280x720.
+        If skip_crop=True, uses the full screenshot without cropping (used in agent mode to avoid
+        accidentally capturing StepPilot's own window instead of the target app).
         Returns: (preprocessed_image_np, (x1, y1, x2, y2) bounds)
         """
         img_h, img_w = image_np.shape[:2]
         x1, y1, x2, y2 = 0, 0, img_w, img_h
         
-        # 1. Crop to active window bounds
-        try:
-            hwnd = win32gui.GetForegroundWindow()
-            if hwnd and not win32gui.IsIconic(hwnd) and hwnd != win32gui.GetDesktopWindow():
-                rect = win32gui.GetWindowRect(hwnd)
-                left, top, right, bottom = rect
-                
-                x1 = max(0, min(left, img_w - 1))
-                y1 = max(0, min(top, img_h - 1))
-                x2 = max(0, min(right, img_w))
-                y2 = max(0, min(bottom, img_h))
-                
-                if (x2 - x1) > 100 and (y2 - y1) > 100:
-                    logger.info(f"Cropping screen to active window bounds: left={x1}, top={y1}, width={x2-x1}, height={y2-y1}")
-                    image_np = image_np[y1:y2, x1:x2]
-                else:
-                    x1, y1, x2, y2 = 0, 0, img_w, img_h
-        except Exception as e:
-            logger.warning(f"Failed to crop to active window: {e}. Using full screenshot.")
-            x1, y1, x2, y2 = 0, 0, img_w, img_h
+        # 1. Crop to active window bounds (skip in agent mode)
+        if not skip_crop:
+            try:
+                hwnd = win32gui.GetForegroundWindow()
+                if hwnd and not win32gui.IsIconic(hwnd) and hwnd != win32gui.GetDesktopWindow():
+                    rect = win32gui.GetWindowRect(hwnd)
+                    left, top, right, bottom = rect
+                    
+                    x1 = max(0, min(left, img_w - 1))
+                    y1 = max(0, min(top, img_h - 1))
+                    x2 = max(0, min(right, img_w))
+                    y2 = max(0, min(bottom, img_h))
+                    
+                    if (x2 - x1) > 100 and (y2 - y1) > 100:
+                        logger.info(f"Cropping screen to active window bounds: left={x1}, top={y1}, width={x2-x1}, height={y2-y1}")
+                        image_np = image_np[y1:y2, x1:x2]
+                    else:
+                        x1, y1, x2, y2 = 0, 0, img_w, img_h
+            except Exception as e:
+                logger.warning(f"Failed to crop to active window: {e}. Using full screenshot.")
+                x1, y1, x2, y2 = 0, 0, img_w, img_h
+        else:
+            logger.info(f"Skipping foreground window crop (agent mode). Using full screen: {img_w}x{img_h}")
             
         # 2. Skip contrast enhancement for desktop screenshots — they have crisp text
         # on solid backgrounds, so CLAHE just wastes CPU cycles.
@@ -301,7 +306,7 @@ class ScreenParser:
         
         # ── Stage 1: Accessibility Tree (fast, ~200-800ms) ──
         t0 = time.time()
-        a11y_results = self.a11y_reader.get_active_window_elements(orig_w, orig_h)
+        a11y_results = await asyncio.to_thread(self.a11y_reader.get_active_window_elements, orig_w, orig_h)
         a11y_ms = (time.time() - t0) * 1000
         logger.info(f"[TIMING] A11y tree: {a11y_ms:.0f}ms → {len(a11y_results)} elements")
         
@@ -327,7 +332,7 @@ class ScreenParser:
         
         if should_run_ocr:
             t0 = time.time()
-            ocr_results = self.run_ocr_on_preprocessed(preprocessed_np, crop_bounds)
+            ocr_results = await asyncio.to_thread(self.run_ocr_on_preprocessed, preprocessed_np, crop_bounds)
             ocr_ms = (time.time() - t0) * 1000
             logger.info(f"[TIMING] OCR: {ocr_ms:.0f}ms → {len(ocr_results)} elements")
         
@@ -338,14 +343,14 @@ class ScreenParser:
             t0 = time.time()
             logger.info("OmniParser is enabled. Running icon detection...")
             existing = ocr_results + a11y_results
-            icon_results = self.run_ui_detector_on_preprocessed(preprocessed_np, crop_bounds, existing)
+            icon_results = await asyncio.to_thread(self.run_ui_detector_on_preprocessed, preprocessed_np, crop_bounds, existing)
             omni_ms = (time.time() - t0) * 1000
             logger.info(f"[TIMING] OmniParser: {omni_ms:.0f}ms → {len(icon_results)} icons")
         
         # ── Stage 4: Merge & Finalize ──
         t0 = time.time()
-        unified_elements = self.merger.merge(ocr_results, a11y_results, icon_results)
-        unified_elements = self.redact_sensitive_data(unified_elements)
+        unified_elements = await asyncio.to_thread(self.merger.merge, ocr_results, a11y_results, icon_results)
+        unified_elements = await asyncio.to_thread(self.redact_sensitive_data, unified_elements)
         merge_ms = (time.time() - t0) * 1000
         
         # Cache results

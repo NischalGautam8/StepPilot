@@ -56,7 +56,7 @@ class OpenAIProvider(LLMProvider):
                 "model": model_name,
                 "messages": messages,
                 "temperature": temperature,
-                "max_tokens": 300,
+                "max_tokens": 500,
             }
             if json_mode and is_native_openai:
                 kwargs["response_format"] = {"type": "json_object"}
@@ -105,7 +105,7 @@ class OpenAIProvider(LLMProvider):
                 "model": model_name,
                 "messages": messages,
                 "temperature": temperature,
-                "max_tokens": 300,
+                "max_tokens": 500,
             }
             if json_mode and is_native_openai:
                 kwargs["response_format"] = {"type": "json_object"}

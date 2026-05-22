@@ -7,6 +7,7 @@ os.environ['FLAGS_enable_pir_api'] = '0'
 os.environ['FLAGS_enable_pir_in_executor'] = '0'
 
 import logging
+import uuid
 import base64
 from io import BytesIO
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -131,13 +132,17 @@ async def capture_and_parse_screen():
     screenshot = pyautogui.screenshot()
     image_np = cv2.cvtColor(np.array(screenshot), cv2.COLOR_RGB2BGR)
     
-    preprocessed_np, crop_bounds = screen_parser.preprocess_image(image_np)
+    # skip_crop=True: In agent mode, don't crop to the foreground window.
+    # The foreground might be StepPilot (on a second screen) after the user
+    # clicks "Execute", while the target app (Notepad etc.) is on screen 1.
+    preprocessed_np, crop_bounds = screen_parser.preprocess_image(image_np, skip_crop=True)
     _, encoded_img = cv2.imencode(".jpg", preprocessed_np)
     last_screenshot_bytes = encoded_img.tobytes()
     
     detected_elements = await screen_parser.parse_screen(preprocessed_np, crop_bounds)
     last_parsed_elements = detected_elements
     return detected_elements
+
 
 
 async def handle_task_start(message: dict, client_id: str):
@@ -400,40 +405,142 @@ async def handle_agent_step_execute(message: dict, client_id: str):
         
         logger.info(f"Executing agent step: tool={tool}, args={args}")
         
-        # ── Repeat-action guard ──
-        # Detect when the LLM proposes the exact same action as the last one
-        # (e.g. key_press("win") twice in a row). This prevents toggle loops
-        # like repeatedly opening/closing the Start menu.
+        # ── Enhanced Loop Detection Guard ──
+        # Detects loops via multiple heuristics and escalates response:
+        # Level 1: Warn + re-read screen
+        # Level 2: Block action + inject explicit instruction to try different approach
+        # Level 3: Auto-finish task as failed
+        MAX_AGENT_STEPS = 30
+        CLICK_PROXIMITY_PX = 60
+        
+        if len(agent_history) >= MAX_AGENT_STEPS:
+            logger.warning(f"Agent hit maximum step limit ({MAX_AGENT_STEPS}). Auto-finishing task.")
+            is_agent_running = False
+            agent_history.append({
+                "tool": "finish",
+                "args": {"success": False, "message": f"Exceeded maximum step limit ({MAX_AGENT_STEPS})."},
+                "result": "auto-terminated"
+            })
+            await ws_manager.send_message({
+                "type": "agent_finished",
+                "success": False,
+                "message": f"Task could not be completed within {MAX_AGENT_STEPS} steps.",
+                "history": agent_history
+            }, client_id)
+            return
+        
+        # Count consecutive loop detections already in history
+        consecutive_loops = 0
+        for h in reversed(agent_history):
+            if h.get("tool") == "read_screen" and "LOOP DETECTED" in h.get("result", ""):
+                consecutive_loops += 1
+            else:
+                break
+        
+        loop_detected = False
+        loop_reason = ""
+        
         if agent_history:
             last = agent_history[-1]
+            
+            # Heuristic 1: Exact repeat (same tool + same args)
             if last.get("tool") == tool and last.get("args") == args and tool not in ("wait", "read_screen", "finish"):
-                logger.warning(
-                    f"BLOCKED repeat action: {tool}({args}) was already the last executed action. "
-                    f"Forcing screen re-read instead to break the loop."
-                )
-                # Force a fresh screen capture so the LLM gets updated state
-                screen_parser.cache_elements = None
-                elements = await capture_and_parse_screen()
-                
+                loop_detected = True
+                loop_reason = f"exact repeat of {tool}({args})"
+            
+            # Heuristic 2: Click proximity loop — 2+ clicks near the same spot
+            if not loop_detected and tool == "click":
+                new_x, new_y = int(args.get("x", 0)), int(args.get("y", 0))
+                recent_clicks = []
+                for h in reversed(agent_history[-8:]):
+                    if h.get("tool") == "click":
+                        hx = int(h["args"].get("x", 0))
+                        hy = int(h["args"].get("y", 0))
+                        if abs(hx - new_x) < CLICK_PROXIMITY_PX and abs(hy - new_y) < CLICK_PROXIMITY_PX:
+                            recent_clicks.append(h)
+                if len(recent_clicks) >= 1:
+                    loop_detected = True
+                    loop_reason = f"clicking near ({new_x},{new_y}) for the {len(recent_clicks)+1}th time"
+            
+            # Heuristic 3: Same tool used 3+ consecutive times (excluding loop-detection read_screens)
+            if not loop_detected and tool not in ("wait", "read_screen", "finish"):
+                consecutive = 0
+                for h in reversed(agent_history):
+                    if h.get("tool") == tool:
+                        consecutive += 1
+                    elif h.get("tool") == "read_screen" and "LOOP DETECTED" in h.get("result", ""):
+                        continue  # Skip loop-detection entries when counting
+                    else:
+                        break
+                if consecutive >= 2:
+                    loop_detected = True
+                    loop_reason = f"{tool} used {consecutive+1} consecutive times"
+        
+        if loop_detected:
+            consecutive_loops += 1
+            logger.warning(
+                f"LOOP DETECTED (level {consecutive_loops}): {loop_reason}. "
+            )
+            
+            # Level 3: Auto-finish after 3 consecutive loop detections
+            if consecutive_loops >= 3:
+                logger.error(f"Agent stuck in unbreakable loop after {consecutive_loops} detections. Force-finishing.")
+                is_agent_running = False
                 agent_history.append({
-                    "tool": "read_screen",
-                    "args": {},
-                    "result": f"auto-triggered: blocked repeat {tool}. Found {len(elements)} elements"
+                    "tool": "finish",
+                    "args": {"success": False, "message": f"Agent stuck in loop: {loop_reason}"},
+                    "result": "auto-terminated-loop"
                 })
-                
-                next_action = await agent_executor.get_next_action(
-                    query=current_task_query,
-                    elements=elements,
-                    history=agent_history,
-                    image_bytes=last_screenshot_bytes
-                )
-                
                 await ws_manager.send_message({
-                    "type": "agent_action_proposed",
-                    "action": next_action,
+                    "type": "agent_finished",
+                    "success": False,
+                    "message": f"Task failed: agent was stuck repeating the same action ({loop_reason}).",
                     "history": agent_history
                 }, client_id)
                 return
+            
+            # Force a fresh screen capture
+            screen_parser.cache_elements = None
+            elements = await capture_and_parse_screen()
+            
+            # Escalating history messages
+            if consecutive_loops == 1:
+                loop_msg = (
+                    f"LOOP DETECTED ({loop_reason}). Screen re-read forced. "
+                    f"Found {len(elements)} elements. "
+                    f"You MUST try a COMPLETELY DIFFERENT action now. "
+                    f"If you already opened a tab/window/menu, move on to the NEXT step of the task. "
+                    f"Consider using keyboard shortcuts like ctrl+n, type_text, or key_press instead of clicking."
+                )
+            else:
+                loop_msg = (
+                    f"BLOCKED ACTION ({loop_reason}). This is loop detection #{consecutive_loops}. "
+                    f"Found {len(elements)} elements. "
+                    f"Your previous action was BLOCKED because you keep repeating it. "
+                    f"The sub-step (opening tab/clicking button) is ALREADY DONE. "
+                    f"You MUST now do something DIFFERENT: type text, press a key, or finish the task. "
+                    f"DO NOT click the same area again."
+                )
+            
+            agent_history.append({
+                "tool": "read_screen",
+                "args": {},
+                "result": loop_msg
+            })
+            
+            next_action = await agent_executor.get_next_action(
+                query=current_task_query,
+                elements=elements,
+                history=agent_history,
+                image_bytes=last_screenshot_bytes
+            )
+            
+            await ws_manager.send_message({
+                "type": "agent_action_proposed",
+                "action": next_action,
+                "history": agent_history
+            }, client_id)
+            return
         
         if tool == "finish":
             is_agent_running = False
@@ -511,10 +618,11 @@ async def handle_agent_step_execute(message: dict, client_id: str):
             # Screen was already captured during execution above
             pass
         elif tool in ("click", "type_text", "key_press", "scroll"):
-            # Brief delay to let the OS render UI changes (Start menu appearing,
-            # text being typed, window focus changing, etc.)
+            # Delay to let the OS render UI changes (Start menu appearing,
+            # text being typed, window focus changing, app launching, etc.)
+            # 1.0s is needed because apps like Notepad take ~1-2s to fully init.
             import asyncio
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(1.0)
             
             # Invalidate cache and capture fresh screen state
             screen_parser.cache_elements = None
@@ -593,7 +701,9 @@ def health_check():
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     """WebSocket communication bridge between Rust client and Python server."""
-    client_id = "rust-client"  # Could be made dynamic based on connection params
+    client_id = websocket.query_params.get("client_id")
+    if not client_id:
+        client_id = f"client-{uuid.uuid4().hex[:8]}"
     
     try:
         await ws_manager.connect(websocket, client_id)

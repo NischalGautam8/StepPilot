@@ -73,7 +73,15 @@ pub struct WsClient {
 }
 
 impl WsClient {
-    pub fn new(url: String) -> Self {
+    pub fn new(mut url: String) -> Self {
+        if !url.contains("client_id=") {
+            let separator = if url.contains('?') { '&' } else { '?' };
+            let timestamp = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_else(|_| std::time::Duration::from_secs(0))
+                .as_nanos();
+            url = format!("{}{}client_id=rust-client-{}", url, separator, timestamp);
+        }
         Self {
             url,
             sender: Arc::new(Mutex::new(None)),

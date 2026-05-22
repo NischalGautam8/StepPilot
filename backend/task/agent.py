@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import re
 from typing import List, Dict, Any, Optional
 from llm.orchestrator import LLMOrchestrator
 
@@ -10,32 +11,52 @@ SYSTEM_PROMPT = """You are a desktop automation agent. You control a Windows PC 
 
 Available tools:
 - click(x, y, button): Click at (x,y). button: "left", "right", "double".
-- type_text(text): Type text at cursor position.
+- type_text(text): Type text at the CURRENT cursor position. No need to click a text field first if it is already focused.
 - key_press(keys): Press key combo, e.g. "enter", "ctrl+c", "win".
 - scroll(x, y, direction, amount): Scroll at (x,y). direction: "up"/"down".
 - wait(seconds): Wait for UI to update.
+- read_screen(): Re-read the screen to get updated UI elements.
 - finish(success, message): Task is done.
 
 Output format - ONLY output this JSON, nothing else:
 {"thought": "brief reason", "tool": "tool_name", "args": {"key": "value"}}
 
+UI Element format: ID:Type"Text"@(cx,cy) where cx,cy is the PRE-COMPUTED click center.
+To click an element, use its cx,cy values DIRECTLY as the x,y arguments. Do NOT modify them.
+
 Example for opening Notepad:
 Step 1: {"thought": "Press Win to open Start menu", "tool": "key_press", "args": {"keys": "win"}}
 Step 2: {"thought": "Start menu is open. Type notepad to search", "tool": "type_text", "args": {"text": "notepad"}}
-Step 3: {"thought": "Notepad app appeared in search results. Click it.", "tool": "click", "args": {"x": 200, "y": 300, "button": "left"}}
+Step 3: {"thought": "Notepad app appeared in search results at @(200,300). Click it.", "tool": "click", "args": {"x": 200, "y": 300, "button": "left"}}
 Step 4: {"thought": "Notepad is now open. Type the text.", "tool": "type_text", "args": {"text": "Hello World"}}
 Step 5: {"thought": "Task complete.", "tool": "finish", "args": {"success": true, "message": "Typed Hello World in Notepad"}}
 
 CRITICAL RULES:
 - Output ONLY the JSON object. No explanation, no code, no markdown.
-- NEVER repeat the same action twice. Check history first.
-- To click an element at (x,y,w,h), click its center: (x+w/2, y+h/2).
+- NEVER repeat the same action on the same target. Check history first.
+- If your last action did not change the screen state, do NOT repeat it. Try a DIFFERENT approach.
+- If you have clicked the same area 2+ times without progress, try: key_press, type_text, scroll, or read_screen instead.
+- Use the cx,cy coordinates from the element list DIRECTLY. Do NOT add, subtract, or calculate anything.
 - The screen elements update after each action. Use CURRENT elements only.
+- If the task seems impossible with current UI state, use finish with success=false.
+- PREFER keyboard shortcuts over clicking small UI buttons. Shortcuts are faster and more reliable.
+- After opening a NEW TAB or document, the text area is already focused. Just use type_text() directly.
+- Elements showing "[empty text field]" are text areas ready for typing — use type_text() to input text there.
+
+USEFUL KEYBOARD SHORTCUTS:
+- Open app: key_press("win"), then type_text("app name"), then key_press("enter")
+- New tab/document: key_press("ctrl+n")
+- Save: key_press("ctrl+s")
+- Close current tab: key_press("ctrl+w")
+- Undo: key_press("ctrl+z")
+- Select all: key_press("ctrl+a")
+- Copy/Paste: key_press("ctrl+c") / key_press("ctrl+v")
+- Switch window: key_press("alt+tab")
 """
 
 AGENT_PROMPT_TEMPLATE = """Task: "{query}"
 
-History:
+History (do NOT repeat any action from this list):
 {history_str}
 
 Current UI Elements:
@@ -55,7 +76,9 @@ class Agent:
     def serialize_elements(elements: List[Dict[str, Any]]) -> str:
         """
         Serializes UI elements into a compact format to minimize token costs.
-        Format: ID:Type"Text"(x,y,w,h)
+        Format: ID:Type"Text"@(cx,cy)
+        where cx,cy is the pre-computed center of the bounding box.
+        This eliminates the need for the LLM to compute coordinates.
         """
         serialized_lines = []
         for elem in elements:
@@ -70,8 +93,16 @@ class Agent:
             
             bbox = elem.get("bbox", [0, 0, 0, 0])
             x, y, w, h = bbox
+            # Pre-compute center so the LLM uses exact coordinates
+            cx = x + w // 2
+            cy = y + h // 2
             
-            serialized_lines.append(f'{short_id}:{elem_type}"{clean_text}"({x},{y},{w},{h})')
+            # Label empty interactive elements so the LLM recognizes them as typeable
+            INTERACTIVE_TYPES = {"Edit", "Document", "TextBox", "RichEdit", "ComboBox"}
+            if not clean_text.strip() and elem_type in INTERACTIVE_TYPES:
+                clean_text = "[empty text field]"
+            
+            serialized_lines.append(f'{short_id}:{elem_type}"{clean_text}"@({cx},{cy})')
             
         return "\n".join(serialized_lines)
 
@@ -145,6 +176,10 @@ class Agent:
                 )
 
             cleaned_response = raw_response.strip()
+
+            # Strip <think>...</think> blocks from thinking models (e.g. Qwen)
+            cleaned_response = re.sub(r'<think>.*?</think>', '', cleaned_response, flags=re.DOTALL).strip()
+
             if cleaned_response.startswith("```json"):
                 cleaned_response = cleaned_response[7:]
             if cleaned_response.startswith("```"):
@@ -152,6 +187,23 @@ class Agent:
             if cleaned_response.endswith("```"):
                 cleaned_response = cleaned_response[:-3]
             cleaned_response = cleaned_response.strip()
+
+            # Evaluate inline arithmetic expressions in JSON values.
+            # Models sometimes output "x": 516 + 888/2 instead of "x": 960.
+            def _eval_inline_math(text: str) -> str:
+                """Replace simple arithmetic expressions (e.g. 516 + 888/2) with their computed integer result."""
+                def _safe_eval(match):
+                    expr = match.group(0)
+                    try:
+                        result = eval(expr, {"__builtins__": {}}, {})
+                        return str(int(result))
+                    except Exception:
+                        return expr
+                # Match patterns like: 516 + 888/2, 118 + 40/2, 100 * 2 + 50
+                # Only inside JSON value positions (after : and before , or })
+                return re.sub(r'(?<=[:,\s])\s*(\d+(?:\s*[+\-*/]\s*\d+)+)', _safe_eval, text)
+
+            cleaned_response = _eval_inline_math(cleaned_response)
 
             # Attempt to extract JSON using brace-matching parser for maximum robustness
             def extract_json_objects(text: str) -> list[dict]:
