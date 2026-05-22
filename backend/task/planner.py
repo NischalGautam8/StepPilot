@@ -54,8 +54,9 @@ class TaskPlanner:
     @staticmethod
     def serialize_elements(elements: List[Dict[str, Any]]) -> str:
         """
-        Serializes UI elements into an compact format to minimize token costs.
-        Format: ID:Type"Text"(x,y,w,h)
+        Serializes UI elements into a compact format to minimize token costs.
+        Format: ID:Type"Text"@(cx,cy)
+        where cx,cy is the pre-computed center of the bounding box.
         """
         serialized_lines = []
         for elem in elements:
@@ -70,8 +71,10 @@ class TaskPlanner:
             
             bbox = elem.get("bbox", [0, 0, 0, 0])
             x, y, w, h = bbox
+            cx = x + w // 2
+            cy = y + h // 2
             
-            serialized_lines.append(f'{short_id}:{elem_type}"{clean_text}"({x},{y},{w},{h})')
+            serialized_lines.append(f'{short_id}:{elem_type}"{clean_text}"@({cx},{cy})')
             
         return "\n".join(serialized_lines)
 

@@ -111,7 +111,7 @@ function App() {
       if (!active) return;
       setWsStatus("connecting");
       
-      socket = new WebSocket("ws://127.0.0.1:8765/ws");
+      socket = new WebSocket("ws://127.0.0.1:8765/ws?client_id=frontend");
 
       socket.onopen = () => {
         if (!active) return;

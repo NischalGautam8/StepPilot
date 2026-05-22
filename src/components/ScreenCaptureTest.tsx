@@ -83,7 +83,7 @@ export function ScreenCaptureTest() {
     };
   }, []);
 
-  const WS_URL = 'ws://127.0.0.1:8765/ws';
+  const WS_URL = 'ws://127.0.0.1:8765/ws?client_id=rust-client';
 
   const connectWebSocket = async () => {
     try {
