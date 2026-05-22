@@ -45,13 +45,15 @@ CRITICAL RULES:
 
 USEFUL KEYBOARD SHORTCUTS:
 - Open app: key_press("win"), then type_text("app name"), then key_press("enter")
-- New tab/document: key_press("ctrl+n")
+- New tab (browser): key_press("ctrl+t")
+- New window: key_press("ctrl+n")
 - Save: key_press("ctrl+s")
 - Close current tab: key_press("ctrl+w")
 - Undo: key_press("ctrl+z")
 - Select all: key_press("ctrl+a")
 - Copy/Paste: key_press("ctrl+c") / key_press("ctrl+v")
 - Switch window: key_press("alt+tab")
+- Address bar (browser): key_press("ctrl+l") or key_press("f6")
 """
 
 AGENT_PROMPT_TEMPLATE = """Task: "{query}"
