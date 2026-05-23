@@ -586,6 +586,20 @@ async def handle_agent_step_execute(message: dict, client_id: str):
             elif tool == "wait":
                 seconds = float(args.get("seconds", 1.0))
                 success = actuator.wait(seconds)
+            elif tool == "open_app":
+                app_name = args.get("app_name", "")
+                success = actuator.open_app(app_name)
+                if success:
+                    result_str = f"opened {app_name} and brought to foreground"
+                else:
+                    result_str = f"failed to open {app_name} — app may not be installed or didn't appear"
+            elif tool == "focus_app":
+                title = args.get("title", "")
+                success = actuator.focus_app(title)
+                if success:
+                    result_str = f"focused window matching '{title}'"
+                else:
+                    result_str = f"no window found matching '{title}' — app may not be open"
             elif tool == "read_screen":
                 try:
                     logger.info("Executing read_screen tool: capturing fresh screenshot and parsing UIElements...")
@@ -597,7 +611,7 @@ async def handle_agent_step_execute(message: dict, client_id: str):
                     success = False
                     result_str = f"failed to read screen: {str(ex)}"
                 
-            if tool != "read_screen":
+            if tool not in ("read_screen", "open_app", "focus_app"):
                 result_str = "success" if success else "failed"
         else:
             # Guided mode: User executed this step manually
@@ -617,6 +631,13 @@ async def handle_agent_step_execute(message: dict, client_id: str):
         if tool == "read_screen":
             # Screen was already captured during execution above
             pass
+        elif tool in ("open_app", "focus_app"):
+            # open_app/focus_app already waited for the app to appear.
+            # Just refresh the screen state without extra delay.
+            screen_parser.cache_elements = None
+            logger.info(f"Auto-refreshing screen after '{tool}' action...")
+            elements = await capture_and_parse_screen()
+            result_str += f" | screen refreshed: {len(elements)} elements"
         elif tool in ("click", "type_text", "key_press", "scroll"):
             # Delay to let the OS render UI changes (Start menu appearing,
             # text being typed, window focus changing, app launching, etc.)

@@ -1,8 +1,11 @@
 import time
 import logging
 import ctypes
+import subprocess
 import pyautogui
 import math
+import win32gui
+import win32con
 
 logger = logging.getLogger("cursor-king-backend.actuator")
 
@@ -159,4 +162,107 @@ class Actuator:
             return True
         except Exception as e:
             logger.error(f"Failed during wait: {e}")
+            return False
+
+    def focus_app(self, title: str) -> bool:
+        """
+        Finds a window whose title contains the given substring (case-insensitive)
+        and brings it to the foreground using Win32 SetForegroundWindow.
+        Returns True if a matching window was found and focused.
+        """
+        try:
+            title_lower = title.lower()
+            found_hwnd = None
+
+            def enum_callback(hwnd, _):
+                nonlocal found_hwnd
+                if found_hwnd:
+                    return True
+                if not win32gui.IsWindowVisible(hwnd):
+                    return True
+                if win32gui.IsIconic(hwnd):
+                    # Window is minimized — restore it
+                    window_title = win32gui.GetWindowText(hwnd)
+                    if title_lower in window_title.lower():
+                        found_hwnd = hwnd
+                    return True
+                window_title = win32gui.GetWindowText(hwnd)
+                if title_lower in window_title.lower():
+                    found_hwnd = hwnd
+                    return False  # Stop enumeration
+                return True
+
+            win32gui.EnumWindows(enum_callback, None)
+
+            if not found_hwnd:
+                logger.warning(f"focus_app: No window found matching title '{title}'")
+                return False
+
+            window_title = win32gui.GetWindowText(found_hwnd)
+            logger.info(f"focus_app: Found window '{window_title}' (HWND {found_hwnd}). Bringing to foreground...")
+
+            # If minimized, restore it first
+            if win32gui.IsIconic(found_hwnd):
+                win32gui.ShowWindow(found_hwnd, win32con.SW_RESTORE)
+                time.sleep(0.3)
+
+            # SetForegroundWindow often fails if the calling process isn't the foreground.
+            # Workaround: simulate a keypress to make the OS allow focus changes.
+            try:
+                # Send a harmless Alt key to bypass Windows foreground lock
+                ctypes.windll.user32.keybd_event(0x12, 0, 0, 0)  # Alt down
+                ctypes.windll.user32.keybd_event(0x12, 0, 2, 0)  # Alt up
+                time.sleep(0.05)
+            except Exception:
+                pass
+
+            result = win32gui.SetForegroundWindow(found_hwnd)
+            time.sleep(0.5)  # Let Windows process the focus change
+
+            logger.info(f"focus_app: SetForegroundWindow returned {result} for '{window_title}'")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to focus app with title '{title}': {e}")
+            return False
+
+    def open_app(self, app_name: str) -> bool:
+        """
+        Opens an application by name using the Windows Start menu search.
+        Uses Win key + type + enter, then waits for the app window to appear.
+        More reliable than manual key sequences because it includes retry logic.
+        """
+        try:
+            logger.info(f"open_app: Opening '{app_name}' via Start menu search...")
+
+            # Press Win key to open Start menu
+            pyautogui.hotkey('win')
+            time.sleep(0.8)
+
+            # Type the app name to search
+            pyautogui.write(app_name, interval=0.05)
+            time.sleep(0.5)
+
+            # Press Enter to launch the top result
+            pyautogui.press('enter')
+
+            # Wait for the app to launch and come to focus (up to 5 seconds)
+            app_lower = app_name.lower()
+            for attempt in range(10):
+                time.sleep(0.5)
+                try:
+                    hwnd = win32gui.GetForegroundWindow()
+                    if hwnd:
+                        fg_title = win32gui.GetWindowText(hwnd)
+                        if app_lower in fg_title.lower():
+                            logger.info(f"open_app: '{app_name}' is now in foreground ('{fg_title}') after {(attempt+1)*0.5:.1f}s")
+                            return True
+                except Exception:
+                    pass
+
+            # If the app didn't come to focus automatically, try focus_app as fallback
+            logger.info(f"open_app: '{app_name}' didn't auto-focus. Trying focus_app fallback...")
+            return self.focus_app(app_name)
+
+        except Exception as e:
+            logger.error(f"Failed to open app '{app_name}': {e}")
             return False
