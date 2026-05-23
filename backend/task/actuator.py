@@ -111,13 +111,76 @@ class Actuator:
             return False
 
     def type_text(self, text: str, interval: float = 0.05) -> bool:
-        """Types the specified text with a human-like interval between keystrokes."""
+        """
+        Types the specified text using clipboard paste for maximum reliability.
+        pyautogui.write() only supports ASCII and drops characters on web UIs
+        with autocomplete (e.g. YouTube search bar). Clipboard paste is instant
+        and handles all characters.
+        """
         try:
-            logger.info(f"Typing text: '{text}'")
-            pyautogui.write(text, interval=interval)
+            logger.info(f"Typing text via clipboard paste: '{text}'")
+            import pyperclip
+            
+            # Copy text to clipboard with verification
+            for attempt in range(3):
+                pyperclip.copy(text)
+                time.sleep(0.1)
+                # Verify clipboard actually has our text
+                try:
+                    current = pyperclip.paste()
+                    if current == text:
+                        break
+                    logger.warning(f"Clipboard verify attempt {attempt+1}: expected '{text}', got '{current}'")
+                except Exception:
+                    pass
+            
+            pyautogui.hotkey('ctrl', 'v')
+            time.sleep(0.15)
+            
             return True
         except Exception as e:
-            logger.error(f"Failed to type text '{text}': {e}")
+            logger.error(f"Failed to type text '{text}' via clipboard: {e}")
+            # Fallback to character-by-character typing
+            try:
+                logger.info(f"Falling back to pyautogui.write for: '{text}'")
+                pyautogui.write(text, interval=interval)
+                return True
+            except Exception as e2:
+                logger.error(f"Fallback typing also failed: {e2}")
+                return False
+
+    def search_text(self, text: str) -> bool:
+        """
+        Types text into the currently focused search field and presses Enter to submit.
+        This is a composite action that combines type_text + Enter into one atomic step.
+        The search field MUST already be focused before calling this.
+        """
+        try:
+            logger.info(f"search_text: Typing '{text}' and pressing Enter...")
+            import pyperclip
+
+            # Copy text to clipboard with verification
+            for attempt in range(3):
+                pyperclip.copy(text)
+                time.sleep(0.1)
+                try:
+                    current = pyperclip.paste()
+                    if current == text:
+                        break
+                    logger.warning(f"Clipboard verify attempt {attempt+1}: expected '{text}', got '{current}'")
+                except Exception:
+                    pass
+
+            # Paste and press Enter
+            pyautogui.hotkey('ctrl', 'v')
+            time.sleep(0.3)  # Wait for paste to be processed
+            pyautogui.press('enter')
+            time.sleep(0.5)  # Wait for search to submit
+
+            logger.info(f"search_text: Submitted search for '{text}'")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to search text '{text}': {e}")
             return False
 
     def key_press(self, keys: str) -> bool:
@@ -162,6 +225,51 @@ class Actuator:
             return True
         except Exception as e:
             logger.error(f"Failed during wait: {e}")
+            return False
+
+    def navigate_url(self, url: str) -> bool:
+        """
+        Navigates the current browser to a URL by focusing the address bar,
+        clearing it, pasting the URL, and pressing Enter.
+        Waits for the page to start loading.
+        """
+        try:
+            import pyperclip
+            logger.info(f"navigate_url: Navigating to '{url}'")
+            
+            # Focus the address bar
+            pyautogui.hotkey('ctrl', 'l')
+            time.sleep(0.3)
+            
+            # Select all existing text
+            pyautogui.hotkey('ctrl', 'a')
+            time.sleep(0.1)
+            
+            # Copy URL to clipboard with verification
+            for attempt in range(3):
+                pyperclip.copy(url)
+                time.sleep(0.1)
+                try:
+                    current = pyperclip.paste()
+                    if current == url:
+                        break
+                    logger.warning(f"Clipboard verify attempt {attempt+1}: expected URL, got '{current[:50]}'")
+                except Exception:
+                    pass
+            
+            pyautogui.hotkey('ctrl', 'v')
+            time.sleep(0.2)
+            
+            # Press Enter to navigate
+            pyautogui.press('enter')
+            
+            # Wait for page to start loading
+            time.sleep(2.0)
+            
+            logger.info(f"navigate_url: Navigation to '{url}' initiated successfully")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to navigate to URL '{url}': {e}")
             return False
 
     def focus_app(self, title: str) -> bool:

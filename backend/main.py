@@ -42,6 +42,7 @@ is_agent_running = False
 current_task_query = ""
 agent_history = []
 agent_mode = "supervised"
+agent_verification_done = False
 
 app = FastAPI(
     title="StepPilot (Cursor-King) Backend",
@@ -339,7 +340,7 @@ async def handle_cancel_download(message: dict, client_id: str):
 async def handle_agent_start(message: dict, client_id: str):
     """Start the interactive agent loop"""
     global agent_executor, actuator, last_parsed_elements, last_screenshot_bytes
-    global is_agent_running, current_task_query, agent_history, agent_mode
+    global is_agent_running, current_task_query, agent_history, agent_mode, agent_verification_done
     
     try:
         query = message.get("query", "")
@@ -358,6 +359,7 @@ async def handle_agent_start(message: dict, client_id: str):
         current_task_query = query
         agent_mode = mode
         agent_history = []
+        agent_verification_done = False
         
         # Force a fresh capture and parse on start
         elements = await capture_and_parse_screen()
@@ -392,7 +394,7 @@ async def handle_agent_start(message: dict, client_id: str):
 async def handle_agent_step_execute(message: dict, client_id: str):
     """Execute the proposed agent action and query LLM for the next step"""
     global agent_executor, actuator, last_parsed_elements, last_screenshot_bytes
-    global is_agent_running, current_task_query, agent_history, agent_mode
+    global is_agent_running, current_task_query, agent_history, agent_mode, agent_verification_done
     
     if not is_agent_running:
         await ws_manager.send_error("Agent is not currently running a task.", client_id)
@@ -410,7 +412,7 @@ async def handle_agent_step_execute(message: dict, client_id: str):
         # Level 1: Warn + re-read screen
         # Level 2: Block action + inject explicit instruction to try different approach
         # Level 3: Auto-finish task as failed
-        MAX_AGENT_STEPS = 30
+        MAX_AGENT_STEPS = 50
         CLICK_PROXIMITY_PX = 60
         
         if len(agent_history) >= MAX_AGENT_STEPS:
@@ -543,6 +545,71 @@ async def handle_agent_step_execute(message: dict, client_id: str):
             return
         
         if tool == "finish":
+            # ── Verification Guard ──
+            # Before accepting a finish, re-read the screen and ask the LLM
+            # to verify the task is actually complete. This prevents premature
+            # finishes where the agent clicked the wrong element but thinks it worked.
+            finish_success = args.get("success", True)
+            
+            if finish_success and len(agent_history) >= 2 and not agent_verification_done:
+                logger.info("Finish requested — running verification guard...")
+                
+                # Take a fresh screenshot
+                screen_parser.cache_elements = None
+                import asyncio
+                await asyncio.sleep(1.0)  # Let UI settle
+                verify_elements = await capture_and_parse_screen()
+                
+                # Inject verification context into a temporary history
+                # so the LLM knows it should verify the outcome
+                verify_history = list(agent_history) + [{
+                    "tool": "read_screen",
+                    "args": {},
+                    "result": (
+                        f"VERIFICATION CHECK: You are about to finish the task "
+                        f'"{current_task_query}" but you MUST verify the outcome first. '
+                        f"Screen re-read found {len(verify_elements)} elements. "
+                        f"Look at the current UI elements carefully. "
+                        f"Is the task outcome VISIBLE on screen? "
+                        f"For example: is a video actually playing? Are search results showing? "
+                        f"Is the correct app/page open? "
+                        f"If YES, call finish(). If NO, take the corrective action needed."
+                    )
+                }]
+                
+                verify_action = await agent_executor.get_next_action(
+                    query=current_task_query,
+                    elements=verify_elements,
+                    history=verify_history,
+                    image_bytes=last_screenshot_bytes
+                )
+                
+                if verify_action.get("tool") != "finish":
+                    # Verification failed — the task isn't done yet
+                    logger.warning(
+                        f"Verification guard REJECTED finish. "
+                        f"LLM wants to do: {verify_action.get('tool')} instead."
+                    )
+                    agent_history.append({
+                        "tool": "read_screen",
+                        "args": {},
+                        "result": (
+                            f"VERIFICATION: You tried to finish but the task is NOT complete. "
+                            f"Screen re-read found {len(verify_elements)} elements. "
+                            f"Continue working on the task."
+                        )
+                    })
+                    
+                    await ws_manager.send_message({
+                        "type": "agent_action_proposed",
+                        "action": verify_action,
+                        "history": agent_history
+                    }, client_id)
+                    return
+                else:
+                    logger.info("Verification guard CONFIRMED task is complete.")
+                    agent_verification_done = True
+            
             is_agent_running = False
             result_str = "task completed"
             agent_history.append({
@@ -552,7 +619,7 @@ async def handle_agent_step_execute(message: dict, client_id: str):
             })
             await ws_manager.send_message({
                 "type": "agent_finished",
-                "success": args.get("success", True),
+                "success": finish_success,
                 "message": args.get("message", "Task completed successfully."),
                 "history": agent_history
             }, client_id)
@@ -574,6 +641,9 @@ async def handle_agent_step_execute(message: dict, client_id: str):
             elif tool == "type_text":
                 text = args.get("text", "")
                 success = actuator.type_text(text)
+            elif tool == "search_text":
+                text = args.get("text", "")
+                success = actuator.search_text(text)
             elif tool == "key_press":
                 keys = args.get("keys", "")
                 success = actuator.key_press(keys)
@@ -600,6 +670,13 @@ async def handle_agent_step_execute(message: dict, client_id: str):
                     result_str = f"focused window matching '{title}'"
                 else:
                     result_str = f"no window found matching '{title}' — app may not be open"
+            elif tool == "navigate_url":
+                url = args.get("url", "")
+                success = actuator.navigate_url(url)
+                if success:
+                    result_str = f"navigated browser to {url}"
+                else:
+                    result_str = f"failed to navigate to {url} — is a browser open and focused?"
             elif tool == "read_screen":
                 try:
                     logger.info("Executing read_screen tool: capturing fresh screenshot and parsing UIElements...")
@@ -611,7 +688,7 @@ async def handle_agent_step_execute(message: dict, client_id: str):
                     success = False
                     result_str = f"failed to read screen: {str(ex)}"
                 
-            if tool not in ("read_screen", "open_app", "focus_app"):
+            if tool not in ("read_screen", "open_app", "focus_app", "navigate_url"):
                 result_str = "success" if success else "failed"
         else:
             # Guided mode: User executed this step manually
@@ -631,14 +708,14 @@ async def handle_agent_step_execute(message: dict, client_id: str):
         if tool == "read_screen":
             # Screen was already captured during execution above
             pass
-        elif tool in ("open_app", "focus_app"):
+        elif tool in ("open_app", "focus_app", "navigate_url"):
             # open_app/focus_app already waited for the app to appear.
             # Just refresh the screen state without extra delay.
             screen_parser.cache_elements = None
             logger.info(f"Auto-refreshing screen after '{tool}' action...")
             elements = await capture_and_parse_screen()
             result_str += f" | screen refreshed: {len(elements)} elements"
-        elif tool in ("click", "type_text", "key_press", "scroll"):
+        elif tool in ("click", "type_text", "search_text", "key_press", "scroll"):
             # Delay to let the OS render UI changes (Start menu appearing,
             # text being typed, window focus changing, app launching, etc.)
             # 1.0s is needed because apps like Notepad take ~1-2s to fully init.
