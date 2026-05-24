@@ -167,6 +167,8 @@ function App() {
               actionDesc = `Click at coordinates (${action.args.x}, ${action.args.y}) with button: ${action.args.button}`;
             } else if (action.tool === "type_text") {
               actionDesc = `Type text: "${action.args.text}"`;
+            } else if (action.tool === "search_text") {
+              actionDesc = `Search text: "${action.args.text}" (Types and presses Enter)`;
             } else if (action.tool === "key_press") {
               actionDesc = `Press keys: "${action.args.keys}"`;
             } else if (action.tool === "scroll") {
