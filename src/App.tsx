@@ -1088,6 +1088,7 @@ function App() {
                             <optgroup label="Gemini 2.5 (Legacy support)">
                               <option value="gemini-2.5-pro">gemini-2.5-pro (Former flagship model widely used for production)</option>
                               <option value="gemini-2.5-flash">gemini-2.5-flash (Fast, cost-efficient multimodal model)</option>
+                              <option value="gemini-2.5-flash-lite">gemini-2.5-flash-lite (Cost-efficient, speed-optimized model)</option>
                             </optgroup>
                           </>
                         ) : (

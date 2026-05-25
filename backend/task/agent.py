@@ -14,7 +14,7 @@ Available tools:
 - type_text(text): Type text at the CURRENT cursor/focus position. The text field MUST be focused first.
 - search_text(text): Types text into the currently focused search field and presses Enter to submit. This is a composite tool that combines typing and Enter into one atomic step. The search field MUST be focused first. Use this instead of type_text when you want to search or submit a query.
 - key_press(keys): Press key combo, e.g. "enter", "ctrl+c", "win".
-- scroll(x, y, direction, amount): Scroll at (x,y). direction: "up"/"down".
+- scroll(x, y, direction, amount): Scroll at (x,y). direction: "up"/"down". amount: number of scroll ticks (integer, e.g., 3, 5, 15).
 - wait(seconds): Wait for UI to update.
 - read_screen(): Re-read the screen to get updated UI elements.
 - open_app(app_name): Open an application by name. Handles Start menu search, launching, and waiting for the app window to appear. USE THIS instead of manually pressing Win+typing+Enter.
@@ -74,7 +74,7 @@ CLICKING RULES FOR WEB PAGES:
 - NEVER click on elements that look like advertisements, sponsored search results, or promoted content. Check for small text like "Ad", "Sponsored", "Promoted", or "Advertisement" next to or inside the element before clicking. Only click organic results.
 - Video results typically have: a title with descriptive text, a channel name, view count, and duration.
 - Look for elements with text that matches what you searched for — those are the actual results.
-- If you can't identify a clear video result, use scroll(direction="down") to see more results, then read_screen().
+- If you can't identify a clear video result, use scroll(x, y, direction="down", amount=5) over the results area to see more results, then read_screen().
 
 WEB NAVIGATION RULES:
 - To search on a website (YouTube, Google, etc.), you MUST first focus the search bar, THEN use search_text(text) to type and submit.
@@ -183,8 +183,19 @@ class Agent:
         # Smart Vision Toggle — only use vision if the model supports it.
         # Text-only models (llama-3.3-70b, deepseek-v3, etc.) will error
         # if sent image data. The A11y tree provides all necessary UI info.
-        model_name = os.getenv("MODEL_NAME", "")
-        is_vision_model = "vision" in model_name.lower()
+        model_name = os.getenv("MODEL_NAME", "").lower()
+        provider_name = os.getenv("LLM_PROVIDER", "").lower()
+        is_vision_model = (
+            "vision" in model_name or
+            "gemini" in model_name or
+            "gpt-4" in model_name or
+            "gpt-5" in model_name or
+            "o1" in model_name or
+            "o3" in model_name or
+            "claude-3" in model_name or
+            provider_name == "gemini" or
+            (provider_name == "openai" and ("gpt-4" in model_name or "gpt-5" in model_name or "o1" in model_name or "o3" in model_name or not model_name))
+        )
         
         use_vision = False
         if image_bytes and is_vision_model:

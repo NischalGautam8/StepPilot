@@ -29,9 +29,9 @@ class TestSprint13Agent(unittest.TestCase):
         serialized = Agent.serialize_elements(elements)
         logger.info(f"Serialized output:\n{serialized}")
         
-        # Verify format matches ID:Type"Text"(x,y,w,h)
-        self.assertIn('1:Button"Submit"(10,20,80,30)', serialized)
-        self.assertIn('2:Edit"Username Field"(100,200,200,40)', serialized)
+        # Verify format matches ID:Type"Text"@(cx,cy)
+        self.assertIn('1:Button"Submit"@(50,35)', serialized)
+        self.assertIn('2:Edit"Username Field"@(200,220)', serialized)
 
     @patch("pyautogui.moveTo")
     @patch("pyautogui.click")
@@ -62,10 +62,17 @@ class TestSprint13Agent(unittest.TestCase):
         self.assertTrue(success)
         mock_right_click.assert_called()
         
-        # 4. Type text
-        success = actuator.type_text("Hello Test")
-        self.assertTrue(success)
-        mock_write.assert_called_with("Hello Test", interval=0.05)
+        # 4. Type text (clipboard path)
+        with patch("pyperclip.copy") as mock_copy, patch("pyperclip.paste", return_value="Hello Test"):
+            success = actuator.type_text("Hello Test")
+            self.assertTrue(success)
+            mock_hotkey.assert_called_with('ctrl', 'v')
+            
+        # 4b. Type text (fallback write path when clipboard fails)
+        with patch("pyperclip.copy", side_effect=Exception("mock copy error")):
+            success = actuator.type_text("Hello Test")
+            self.assertTrue(success)
+            mock_write.assert_called_with("Hello Test", interval=0.05)
         
         # 5. Hotkey press
         success = actuator.key_press("ctrl+shift+p")
