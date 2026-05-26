@@ -2,7 +2,7 @@
 
 use std::sync::Mutex;
 use tauri::{AppHandle, Manager};
-use std::process::{Child, Command};
+use std::process::{Child, Command, Stdio};
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
@@ -13,8 +13,20 @@ fn get_sidecar_child() -> &'static Mutex<Option<Child>> {
 }
 
 fn find_sidecar_path(app: &AppHandle) -> Option<PathBuf> {
-    // 1. Try standard resolve using Resource base directory (appends target triple in bundling)
-    if let Ok(resource_path) = app.path().resolve("binaries/backend-x86_64-pc-windows-msvc.exe", tauri::path::BaseDirectory::Resource) {
+    // In development/debug mode, do not spawn or search for the production sidecar.
+    // The Python FastAPI backend is managed externally (e.g., via dev.ps1).
+    #[cfg(debug_assertions)]
+    {
+        return None;
+    }
+
+    // 1. Try standard resolve using Resource base directory (checks both clean name and target triple)
+    if let Ok(resource_path) = app.path().resolve("backend.exe", tauri::path::BaseDirectory::Resource) {
+        if resource_path.exists() {
+            return Some(resource_path);
+        }
+    }
+    if let Ok(resource_path) = app.path().resolve("binaries/backend.exe", tauri::path::BaseDirectory::Resource) {
         if resource_path.exists() {
             return Some(resource_path);
         }
@@ -24,10 +36,23 @@ fn find_sidecar_path(app: &AppHandle) -> Option<PathBuf> {
             return Some(resource_path);
         }
     }
+    if let Ok(resource_path) = app.path().resolve("binaries/backend-x86_64-pc-windows-msvc.exe", tauri::path::BaseDirectory::Resource) {
+        if resource_path.exists() {
+            return Some(resource_path);
+        }
+    }
 
     // 2. Fall back to current executable's folder search
     if let Ok(current_exe) = std::env::current_exe() {
         if let Some(current_dir) = current_exe.parent() {
+            let sidecar_path = current_dir.join("backend.exe");
+            if sidecar_path.exists() {
+                return Some(sidecar_path);
+            }
+            let sidecar_path = current_dir.join("binaries").join("backend.exe");
+            if sidecar_path.exists() {
+                return Some(sidecar_path);
+            }
             let sidecar_path = current_dir.join("backend-x86_64-pc-windows-msvc.exe");
             if sidecar_path.exists() {
                 return Some(sidecar_path);
@@ -40,6 +65,16 @@ fn find_sidecar_path(app: &AppHandle) -> Option<PathBuf> {
     }
 
     None
+}
+
+/// Get a path for the sidecar log file (next to the main executable)
+fn get_sidecar_log_path() -> PathBuf {
+    if let Ok(current_exe) = std::env::current_exe() {
+        if let Some(dir) = current_exe.parent() {
+            return dir.join("backend_sidecar.log");
+        }
+    }
+    PathBuf::from("backend_sidecar.log")
 }
 
 #[tauri::command]
@@ -57,15 +92,27 @@ pub fn start_sidecar(app: AppHandle) -> Result<String, String> {
     if let Some(sidecar_path) = find_sidecar_path(&app) {
         println!("start_sidecar: found production sidecar at {:?}", sidecar_path);
         
+        // Open a log file for backend stderr so we can diagnose crashes
+        let log_path = get_sidecar_log_path();
+        println!("start_sidecar: logging backend output to {:?}", log_path);
+        
+        let log_file = std::fs::File::create(&log_path)
+            .map_err(|e| format!("Failed to create sidecar log file: {}", e))?;
+        let log_file_stdout = log_file.try_clone()
+            .map_err(|e| format!("Failed to clone log file handle: {}", e))?;
+
         #[cfg(target_os = "windows")]
         {
             use std::os::windows::process::CommandExt;
             // CREATE_NO_WINDOW = 0x08000000 to hide console window of the spawned sidecar
             let mut cmd = Command::new(&sidecar_path);
             cmd.creation_flags(0x08000000);
+            cmd.stdout(Stdio::from(log_file_stdout));
+            cmd.stderr(Stdio::from(log_file));
             
             match cmd.spawn() {
                 Ok(child) => {
+                    println!("start_sidecar: backend.exe spawned with PID {}", child.id());
                     let mut child_guard = get_sidecar_child().lock().unwrap();
                     *child_guard = Some(child);
                     Ok("Sidecar started successfully".to_string())
@@ -75,8 +122,13 @@ pub fn start_sidecar(app: AppHandle) -> Result<String, String> {
         }
         #[cfg(not(target_os = "windows"))]
         {
-            match Command::new(&sidecar_path).spawn() {
+            let mut cmd = Command::new(&sidecar_path);
+            cmd.stdout(Stdio::from(log_file_stdout));
+            cmd.stderr(Stdio::from(log_file));
+            
+            match cmd.spawn() {
                 Ok(child) => {
+                    println!("start_sidecar: backend spawned with PID {}", child.id());
                     let mut child_guard = get_sidecar_child().lock().unwrap();
                     *child_guard = Some(child);
                     Ok("Sidecar started successfully".to_string())

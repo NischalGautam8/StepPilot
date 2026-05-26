@@ -63,10 +63,20 @@ pub fn run() {
             ws_client::ws_send_task_start
         ])
         .setup(|app| {
+            // Auto-start the sidecar backend in production builds.
+            // The frontend WebSocket connects immediately on mount, so the
+            // backend must be spawning BEFORE the webview loads.
+            let app_handle = app.handle().clone();
+            match sidecar::start_sidecar(app_handle) {
+                Ok(msg) => println!("Auto-start sidecar: {}", msg),
+                Err(e) => eprintln!("Auto-start sidecar FAILED: {}", e),
+            }
+
             // Configure overlay window for transparent click-through
             if let Some(overlay_window) = app.get_webview_window("overlay") {
                 let _ = overlay_window.set_ignore_cursor_events(true);
             }
+
 
             // Spawn background thread to monitor cursor click coordinates and auto-advance
             let app_handle = app.handle().clone();
