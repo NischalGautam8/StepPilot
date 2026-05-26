@@ -762,7 +762,22 @@ async def handle_agent_step_execute(message: dict, client_id: str):
                 x = int(args.get("x", 0))
                 y = int(args.get("y", 0))
                 direction = args.get("direction", "down")
-                amount = int(args.get("amount", 3))
+                
+                # Parse scroll amount robustly to handle values like 'one_page', floats, or non-numeric strings
+                amount_raw = args.get("amount", 3)
+                try:
+                    if isinstance(amount_raw, str):
+                        if "page" in amount_raw.lower():
+                            amount = 15  # a page scroll is typically ~15 scroll ticks
+                        else:
+                            import re
+                            digits = re.findall(r'\d+', amount_raw)
+                            amount = int(digits[0]) if digits else 3
+                    else:
+                        amount = int(amount_raw)
+                except (ValueError, TypeError, IndexError):
+                    amount = 3
+                    
                 success = actuator.scroll(x, y, direction, amount)
             elif tool == "wait":
                 seconds = float(args.get("seconds", 1.0))

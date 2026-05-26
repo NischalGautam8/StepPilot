@@ -32,6 +32,9 @@ class TestSprint13Agent(unittest.TestCase):
         # Verify format matches ID:Type"Text"@(cx,cy)
         self.assertIn('1:Button"Submit"@(50,35)', serialized)
         self.assertIn('2:Edit"Username Field"@(200,220)', serialized)
+        # Verify format matches ID:Type"Text"@(cx,cy)
+        self.assertIn('1:Button"Submit"@(50,35)', serialized)
+        self.assertIn('2:Edit"Username Field"@(200,220)', serialized)
 
     @patch("pyautogui.moveTo")
     @patch("pyautogui.click")
