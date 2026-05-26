@@ -64,3 +64,6 @@ conda-env/
 # OS Specific
 .DS_Store
 Thumbs.db
+
+# Tauri sidecar binaries
+src-tauri/binaries/

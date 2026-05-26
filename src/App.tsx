@@ -16,10 +16,111 @@ import {
   CheckCircle,
   AlertCircle,
   Save,
-  History as HistoryIcon
+  History as HistoryIcon,
+  ClipboardList
 } from "lucide-react";
 import { ScreenCaptureTest } from "./components";
 import "./App.css";
+
+function ActionLogCard({ log, index }: { log: any; index: number }) {
+  const [expanded, setExpanded] = useState(false);
+  
+  const isHighRisk = log.risk === "high";
+  const isMediumRisk = log.risk === "medium";
+  const riskColor = isHighRisk ? "#ef4444" : isMediumRisk ? "#fbbf24" : "#34d399";
+  
+  return (
+    <div className={`action-log-card ${expanded ? "expanded" : ""}`}>
+      {/* Header */}
+      <div 
+        onClick={() => setExpanded(!expanded)}
+        className="action-log-header"
+      >
+        <div className="action-log-header-left">
+          <span className="action-log-index">
+            #{index + 1}
+          </span>
+          <span className="action-log-timestamp">
+            [{log.timestamp}]
+          </span>
+          <span className="action-log-tool">
+            {log.tool}
+          </span>
+          <span className="action-log-risk-badge" style={{
+            background: `${riskColor}15`,
+            color: riskColor,
+            border: `1px solid ${riskColor}30`
+          }}>
+            {log.risk ? log.risk.toUpperCase() : "LOW"} RISK
+          </span>
+        </div>
+        
+        <div className="action-log-header-right">
+          <span style={{
+            color: log.result === "success" || log.result.includes("refreshed") ? "#34d399" : log.result === "denied by user" ? "#f59e0b" : "#ef4444"
+          }} className="action-log-result">
+            {log.result === "denied by user" ? "Denied" : log.result.includes("success") || log.result.includes("refreshed") ? "Success" : log.result}
+          </span>
+          <span className={`action-log-arrow ${expanded ? "rotated" : ""}`}>
+            ▼
+          </span>
+        </div>
+      </div>
+      
+      {/* Expanded Content */}
+      {expanded && (
+        <div className="action-log-expanded-content">
+          {/* Args */}
+          <div className="action-log-section">
+            <strong className="action-log-section-title">Arguments:</strong>
+            <pre className="action-log-code">
+              {JSON.stringify(log.args, null, 2)}
+            </pre>
+          </div>
+          
+          {/* Detailed Result */}
+          <div className="action-log-section">
+            <strong className="action-log-section-title">Execution Result Log:</strong>
+            <div className="action-log-result-detail">
+              {log.result}
+            </div>
+          </div>
+          
+          {/* Before/After Screenshots */}
+          {(log.before_img || log.after_img) && (
+            <div className="action-log-screenshots-grid">
+              <div className="action-log-screenshot-wrapper">
+                <span className="action-log-screenshot-title">
+                  Before Action Screenshot
+                </span>
+                <div className="action-log-screenshot-container">
+                  {log.before_img ? (
+                    <img src={log.before_img} alt="Before" className="action-log-img" />
+                  ) : (
+                    <div className="action-log-no-image">No capture</div>
+                  )}
+                </div>
+              </div>
+              
+              <div className="action-log-screenshot-wrapper">
+                <span className="action-log-screenshot-title">
+                  After Action Screenshot
+                </span>
+                <div className="action-log-screenshot-container">
+                  {log.after_img ? (
+                    <img src={log.after_img} alt="After" className="action-log-img" />
+                  ) : (
+                    <div className="action-log-no-image">No capture</div>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
 
 interface Message {
   id: string;
@@ -51,7 +152,7 @@ interface HistoryItem {
 }
 
 function App() {
-  const [activeTab, setActiveTab] = useState<"chat" | "dashboard" | "settings" | "sprint2test">("chat");
+  const [activeTab, setActiveTab] = useState<"chat" | "dashboard" | "settings" | "sprint2test" | "logs">("chat");
   const [wsStatus, setWsStatus] = useState<"connected" | "disconnected" | "connecting">("connecting");
   const [messages, setMessages] = useState<Message[]>([
     {
@@ -183,23 +284,53 @@ function App() {
             
             addAssistantMessage(`Proposed Action: ${actionDesc}\nReasoning: "${action.thought}"`);
             
+            const risk = action.risk || "medium";
+            
             if (settingsRef.current.execution_mode === "yolo") {
               if (socket && socket.readyState === WebSocket.OPEN) {
                 socket.send(JSON.stringify({ type: "agent_step_execute", action }));
               }
               setAgentProposedAction(null);
+            } else if (settingsRef.current.execution_mode === "supervised") {
+              if (risk === "low") {
+                addSystemMessage(`Auto-executing low-risk action: ${action.tool}`);
+                if (socket && socket.readyState === WebSocket.OPEN) {
+                  socket.send(JSON.stringify({ type: "agent_step_execute", action }));
+                }
+                setAgentProposedAction(null);
+              } else {
+                invoke("toggle_overlay", { show: true }).catch(() => {});
+                import("@tauri-apps/api/event").then(({ emit }) => {
+                  emit("show-agent-proposal", { action, risk });
+                });
+              }
             } else if (settingsRef.current.execution_mode === "autonomous") {
-              setCountdown(1.5);
+              if (risk === "high") {
+                addSystemMessage(`⚠️ High-risk action detected! Always requires manual confirmation.`);
+                invoke("toggle_overlay", { show: true }).catch(() => {});
+                import("@tauri-apps/api/event").then(({ emit }) => {
+                  emit("show-agent-proposal", { action, risk });
+                });
+              } else {
+                setCountdown(1.5);
+                import("@tauri-apps/api/event").then(({ emit }) => {
+                  emit("show-agent-proposal", { action, risk });
+                });
+              }
             }
           } else if (data.type === "agent_finished") {
             setIsAgentRunning(false);
             setAgentProposedAction(null);
             addSystemMessage(`✓ Task Completed: ${data.message}`);
             addAssistantMessage(`Task execution finished! ${data.message}`);
+            import("@tauri-apps/api/event").then(({ emit }) => emit("clear-guidance-hint"));
+            invoke("toggle_overlay", { show: false }).catch(() => {});
           } else if (data.type === "agent_aborted") {
             setIsAgentRunning(false);
             setAgentProposedAction(null);
             addSystemMessage(`❌ Task Aborted: ${data.message}`);
+            import("@tauri-apps/api/event").then(({ emit }) => emit("clear-guidance-hint"));
+            invoke("toggle_overlay", { show: false }).catch(() => {});
           } else if (data.type === "ack" && data.received === "task_start") {
             const plan = data.plan;
             if (plan && plan.steps && plan.steps.length > 0) {
@@ -241,12 +372,43 @@ function App() {
     };
   }, []);
 
-  // Agent Helpers (Sprint 13)
+  // Agent Helpers (Sprint 13 & 14)
   const handleApproveAction = (action: any) => {
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
       setCountdown(null);
       wsRef.current.send(JSON.stringify({ type: "agent_step_execute", action }));
       setAgentProposedAction(null);
+      
+      import("@tauri-apps/api/event").then(({ emit }) => emit("clear-guidance-hint"));
+      invoke("toggle_overlay", { show: false }).catch(() => {});
+    }
+  };
+
+  const handleDenyAction = (action: any) => {
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      setCountdown(null);
+      wsRef.current.send(JSON.stringify({
+        type: "agent_step_execute",
+        action,
+        denied: true
+      }));
+      setAgentProposedAction(null);
+      addSystemMessage(`Action Denied. Requesting alternative approach...`);
+      
+      import("@tauri-apps/api/event").then(({ emit }) => emit("clear-guidance-hint"));
+      invoke("toggle_overlay", { show: false }).catch(() => {});
+    }
+  };
+
+  const handleUndoAgent = () => {
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      setCountdown(null);
+      wsRef.current.send(JSON.stringify({ type: "agent_undo" }));
+      setAgentProposedAction(null);
+      addSystemMessage("Undoing last action...");
+      
+      import("@tauri-apps/api/event").then(({ emit }) => emit("clear-guidance-hint"));
+      invoke("toggle_overlay", { show: false }).catch(() => {});
     }
   };
 
@@ -425,6 +587,12 @@ function App() {
     setCurrentStepIndex(-1);
   };
 
+  // Store proposed action in ref to avoid stale closures in event listeners
+  const agentProposedActionRef = useRef<any>(null);
+  useEffect(() => {
+    agentProposedActionRef.current = agentProposedAction;
+  }, [agentProposedAction]);
+
   // Listen to Tauri events emitted from Rust backend & Overlay
   useEffect(() => {
     const unlistenStart = listen("tray-start", () => {
@@ -445,6 +613,16 @@ function App() {
     const unlistenRequestNextStep = listen("request-next-step", () => {
       handleNextStep();
     });
+    const unlistenConfirm = listen("confirm-agent-action", () => {
+      if (agentProposedActionRef.current) {
+        handleApproveAction(agentProposedActionRef.current);
+      }
+    });
+    const unlistenDeny = listen("deny-agent-action", () => {
+      if (agentProposedActionRef.current) {
+        handleDenyAction(agentProposedActionRef.current);
+      }
+    });
 
     return () => {
       unlistenStart.then((fn) => fn());
@@ -452,6 +630,8 @@ function App() {
       unlistenNav.then((fn) => fn());
       unlistenAutoAdvance.then((fn) => fn());
       unlistenRequestNextStep.then((fn) => fn());
+      unlistenConfirm.then((fn) => fn());
+      unlistenDeny.then((fn) => fn());
     };
   }, [currentPlan, currentStepIndex]);
 
@@ -636,6 +816,13 @@ function App() {
               <SettingsIcon size={18} />
               App Settings
             </button>
+            <button
+              className={`nav-button ${activeTab === "logs" ? "active" : ""}`}
+              onClick={() => setActiveTab("logs")}
+            >
+              <ClipboardList size={18} />
+              Action Log
+            </button>
           </div>
 
           {currentPlan && (
@@ -761,6 +948,11 @@ function App() {
                           <button className="hud-next-button" style={{ flex: 1, padding: "8px 16px", borderRadius: "6px", fontWeight: "600", background: "var(--accent-primary)", border: "none", cursor: "pointer", color: "white" }} onClick={() => handleApproveAction(agentProposedAction)}>
                             Approve Action & Run
                           </button>
+                          {agentHistory.length > 0 && (
+                            <button className="hud-undo-button" onClick={handleUndoAgent}>
+                              Undo Last Step
+                            </button>
+                          )}
                           <button className="hud-cancel-button" style={{ background: "rgba(248, 113, 113, 0.15)", color: "#f87171", border: "1px solid rgba(248, 113, 113, 0.3)", padding: "8px 12px", borderRadius: "6px", cursor: "pointer" }} onClick={handleAbortAgent}>
                             Abort Agent
                           </button>
@@ -889,6 +1081,25 @@ function App() {
                   <Send size={16} />
                 </button>
               </form>
+            </div>
+          </section>
+        )}
+
+        {activeTab === "logs" && (
+          <section className="dashboard-panel">
+            <div>
+              <h2 className="dashboard-title">Agent Session Action Log</h2>
+              <p className="dashboard-subtitle">Inspect before/after screenshot comparisons and details for all executed actions.</p>
+            </div>
+            
+            <div className="logs-container">
+              {agentHistory.length === 0 ? (
+                <div style={{ padding: "40px", textAlign: "center", color: "var(--text-secondary)", background: "rgba(255, 255, 255, 0.02)", borderRadius: "12px", border: "1px dashed rgba(255, 255, 255, 0.1)" }}>
+                  No actions executed yet. Start an agent task to record logs here.
+                </div>
+              ) : (
+                agentHistory.map((log, index) => <ActionLogCard key={index} log={log} index={index} />)
+              )}
             </div>
           </section>
         )}
@@ -1088,6 +1299,7 @@ function App() {
                             <optgroup label="Gemini 2.5 (Legacy support)">
                               <option value="gemini-2.5-pro">gemini-2.5-pro (Former flagship model widely used for production)</option>
                               <option value="gemini-2.5-flash">gemini-2.5-flash (Fast, cost-efficient multimodal model)</option>
+                              <option value="gemini-2.5-flash-lite">gemini-2.5-flash-lite (Cost-efficient, speed-optimized model)</option>
                             </optgroup>
                           </>
                         ) : (
