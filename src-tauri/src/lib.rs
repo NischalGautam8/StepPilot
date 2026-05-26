@@ -193,6 +193,13 @@ pub fn run() {
 
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|_app_handle, event| match event {
+            tauri::RunEvent::Exit => {
+                println!("StepPilot: Application exiting, stopping sidecar process...");
+                let _ = sidecar::stop_sidecar();
+            }
+            _ => {}
+        });
 }

@@ -29,9 +29,9 @@ class TestSprint13Agent(unittest.TestCase):
         serialized = Agent.serialize_elements(elements)
         logger.info(f"Serialized output:\n{serialized}")
         
-        # Verify format matches ID:Type"Text"(x,y,w,h)
-        self.assertIn('1:Button"Submit"(10,20,80,30)', serialized)
-        self.assertIn('2:Edit"Username Field"(100,200,200,40)', serialized)
+        # Verify format matches ID:Type"Text"@(cx,cy)
+        self.assertIn('1:Button"Submit"@(50,35)', serialized)
+        self.assertIn('2:Edit"Username Field"@(200,220)', serialized)
 
     @patch("pyautogui.moveTo")
     @patch("pyautogui.click")
@@ -44,6 +44,17 @@ class TestSprint13Agent(unittest.TestCase):
     @patch("pyautogui.position", return_value=(0, 0))
     def test_actuator_commands(self, mock_pos, mock_scroll, mock_hotkey, mock_press, mock_write, mock_right_click, mock_double_click, mock_click, mock_move):
         """Test Actuator mapping coordinates and translating commands to PyAutoGUI calls"""
+        current_pos = [0, 0]
+        def mock_move_to(x, y=None):
+            if y is not None:
+                current_pos[0] = x
+                current_pos[1] = y
+            else:
+                current_pos[0] = x[0]
+                current_pos[1] = x[1]
+        mock_move.side_effect = mock_move_to
+        mock_pos.side_effect = lambda: (current_pos[0], current_pos[1])
+
         actuator = Actuator(move_duration=0.01) # Set short move duration for testing speed
         
         # 1. Click
@@ -62,10 +73,12 @@ class TestSprint13Agent(unittest.TestCase):
         self.assertTrue(success)
         mock_right_click.assert_called()
         
-        # 4. Type text
-        success = actuator.type_text("Hello Test")
-        self.assertTrue(success)
-        mock_write.assert_called_with("Hello Test", interval=0.05)
+        # 4. Type text (uses clipboard paste)
+        with patch("pyperclip.copy") as mock_copy, patch("pyperclip.paste", return_value="Hello Test") as mock_paste:
+            success = actuator.type_text("Hello Test")
+            self.assertTrue(success)
+            mock_copy.assert_called_with("Hello Test")
+            mock_hotkey.assert_called_with("ctrl", "v")
         
         # 5. Hotkey press
         success = actuator.key_press("ctrl+shift+p")

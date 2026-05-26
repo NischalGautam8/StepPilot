@@ -337,93 +337,93 @@
 **Goal**: Enable LLM-driven autonomous control of mouse and keyboard.
 **Duration**: 1 week
 
-- [ ] Integrate PyAutoGUI for mouse control:
+- [x] Integrate PyAutoGUI for mouse control:
   - `click(x, y)`, `doubleClick(x, y)`, `rightClick(x, y)`
   - `moveTo(x, y, duration=0.3)` — smooth animated movement
   - `scroll(clicks, x, y)`
-- [ ] Integrate PyAutoGUI for keyboard control:
+- [x] Integrate PyAutoGUI for keyboard control:
   - `typewrite(text, interval=0.05)` — human-like typing speed
   - `hotkey('ctrl', 'c')` — key combinations
   - `press('enter')` — single key press
-- [ ] Implement LLM tool calling schema (OpenAI function calling format):
+- [x] Implement LLM tool calling schema (OpenAI function calling format):
   - `click(x, y, button)` — click at coordinates
   - `type_text(text)` — type text at cursor
   - `key_press(keys)` — press key combination
   - `scroll(x, y, direction, amount)` — scroll at position
   - `screenshot()` — take new screenshot to observe result
   - `wait(seconds)` — wait for UI to update
-- [ ] Create `Actuator` class with two modes:
+- [x] Create `Actuator` class with two modes:
   - `mode="guide"` → show overlay hints (existing behavior)
   - `mode="auto"` → execute PyAutoGUI actions
-- [ ] Implement mode selector in settings: Guided / Supervised / Autonomous
-- [ ] Add smooth cursor movement animation before clicks (feels natural)
-- [ ] Verify: LLM successfully opens Notepad and types "Hello World"
+- [x] Implement mode selector in settings: Guided / Supervised / Autonomous
+- [x] Add smooth cursor movement animation before clicks (feels natural)
+- [x] Verify: LLM successfully opens Notepad and types "Hello World"
 
 **Implementation Detail**: PyAutoGUI runs in the Python backend. Coordinate mapping must account for DPI scaling (use `ctypes` to get actual screen scale factor).
 
 ---
 
-### Sprint 14: Safety Systems & Supervised Mode
+### Sprint 14: Safety Systems & Supervised Mode [DONE]
 **Goal**: Implement safety mechanisms to prevent unintended actions.
 **Duration**: 1 week
 
-- [ ] Implement "Supervised" mode:
+- [x] Implement "Supervised" mode:
   - LLM proposes action → show overlay preview (arrow + label)
   - User confirms via floating [✓ Allow] / [✗ Deny] buttons
   - Temporarily disable click-through for confirmation buttons
   - If denied, ask LLM for alternative approach
-- [ ] Implement physical mouse override (emergency stop):
+- [x] Implement physical mouse override (emergency stop):
   - Track mouse position continuously
   - If user moves mouse during autonomous action → immediately halt
   - Show "Agent paused — you moved the mouse" notification
   - Option to resume or cancel
-- [ ] Implement action risk classification:
+- [x] Implement action risk classification:
   - Low risk: mouse move, scroll, type in text field → auto-allow in autonomous mode
   - Medium risk: click button, press Enter → require confirmation in supervised mode
   - High risk: delete, send, submit, close window → always require confirmation
-- [ ] Add action log panel in main window:
+- [x] Add action log panel in main window:
   - Every action taken: timestamp, type, coordinates, result
   - Expandable details with before/after screenshots
-- [ ] Implement undo system (basic):
+- [x] Implement undo system (basic):
   - Record Ctrl+Z after each action as potential undo
   - Offer "Undo last action" button
-- [ ] Add PyAutoGUI failsafe: mouse to corner = abort all
-- [ ] Verify: supervised mode correctly blocks and confirms before high-risk actions
+- [x] Add PyAutoGUI failsafe: mouse to corner = abort all
+- [x] Verify: supervised mode correctly blocks and confirms before high-risk actions
 
 **Implementation Detail**: Risk classification uses both element type (from A11y) and element text (contains "delete", "send", etc.) to determine risk level.
 
 ---
 
-### Sprint 15: End-to-End Polish & Packaging
+### Sprint 15: End-to-End Polish & Packaging [DONE]
 **Goal**: Final refinement, packaging, and documentation.
 **Duration**: 1 week
 
-- [ ] Performance optimization pass:
+- [x] Performance optimization pass:
   - Target <2s end-to-end latency for guidance
   - Profile and optimize bottlenecks (OCR, LLM, rendering)
   - Implement element caching between unchanged frames
   - Parallel pipeline: OCR + A11y + capture run concurrently
-- [ ] Build PyInstaller sidecar:
+- [x] Build PyInstaller sidecar:
   - Bundle Python backend as `backend.exe`
   - Include PaddleOCR models and dependencies
   - Test standalone execution
-- [ ] Configure Tauri production build:
+- [x] Configure Tauri production build:
   - Bundle `backend.exe` as external binary (sidecar)
   - Set app icon, metadata, version
   - Build Windows installer (.msi)
-- [ ] Create onboarding flow:
+- [x] Create onboarding flow:
   - First-launch setup wizard: enter API key, choose provider
   - Interactive tutorial: "Try saying 'Open Calculator'"
-- [ ] Write user documentation:
+- [x] Write user documentation:
   - README with setup instructions
   - Supported apps and known limitations
   - Keyboard shortcuts reference
-- [ ] Final testing across common apps:
+- [x] Final testing across common apps:
   - File Explorer, Chrome, Notepad, WhatsApp Desktop
   - Test with different Windows themes (light/dark)
   - Test with different DPI scaling (100%, 125%, 150%)
-- [ ] Create GitHub release with changelog
-- [ ] Verify: clean install from .msi → complete a multi-step task successfully
+- [x] Create GitHub release with changelog
+- [x] Verify: clean install from .msi → complete a multi-step task successfully
 
 **Implementation Detail**: Final binary should be <150MB (Tauri ~5MB + Python sidecar ~100-140MB). Installer handles all dependencies.
 

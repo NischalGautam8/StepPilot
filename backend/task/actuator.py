@@ -20,6 +20,10 @@ except Exception as e:
 pyautogui.FAILSAFE = True
 pyautogui.PAUSE = 0.1  # Add a tiny pause after pyautogui commands for safety
 
+class UserInterventionException(Exception):
+    """Raised when the user physically overrides the mouse or keyboard during automation."""
+    pass
+
 class Actuator:
     """
     Actuator executes OS-level actions (mouse click/movement, keyboard typing/hotkeys)
@@ -69,6 +73,12 @@ class Actuator:
                 
                 pyautogui.moveTo(curr_x, curr_y)
                 time.sleep(self.move_duration / steps)
+                
+                # Check for user physical mouse override
+                actual_x, actual_y = pyautogui.position()
+                if abs(actual_x - curr_x) > 20 or abs(actual_y - curr_y) > 20:
+                    logger.warning(f"Physical mouse override detected: cursor expected at ({curr_x}, {curr_y}) but found at ({actual_x}, {actual_y})")
+                    raise UserInterventionException("User physically moved the mouse during automated movement.")
                 
             # Ensure exact target coordinates at the end
             pyautogui.moveTo(target_x, target_y)

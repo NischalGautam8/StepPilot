@@ -17,6 +17,7 @@ from PIL import Image
 import cv2
 import numpy as np
 import pyautogui
+from task.actuator import UserInterventionException
 
 # Initialize structured logging first
 from core.logger import setup_logging, get_logger, log_error, log_websocket_event
@@ -143,6 +144,58 @@ async def capture_and_parse_screen():
     detected_elements = await screen_parser.parse_screen(preprocessed_np, crop_bounds)
     last_parsed_elements = detected_elements
     return detected_elements
+
+
+def classify_action_risk(tool: str, args: dict) -> str:
+    """Classifies the safety risk of an agent action: low, medium, high."""
+    if tool in ("wait", "read_screen", "scroll"):
+        return "low"
+    if tool in ("type_text", "search_text"):
+        return "low"
+    
+    if tool in ("open_app", "focus_app", "navigate_url"):
+        return "medium"
+        
+    if tool == "key_press":
+        keys = str(args.get("keys", "")).lower()
+        if any(k in keys for k in ("alt+f4", "ctrl+w", "enter", "delete")):
+            return "high"
+        return "medium"
+        
+    if tool == "click":
+        x = int(args.get("x", 0))
+        y = int(args.get("y", 0))
+        button = str(args.get("button", "left")).lower()
+        
+        target_text = ""
+        global last_parsed_elements
+        for elem in last_parsed_elements:
+            bbox = elem.get("bbox", [0,0,0,0])
+            bx, by, bw, bh = bbox
+            cx = bx + bw // 2
+            cy = by + bh // 2
+            if cx == x and cy == y:
+                target_text = str(elem.get("text", "")).lower()
+                break
+                
+        if not target_text:
+            for elem in last_parsed_elements:
+                bbox = elem.get("bbox", [0,0,0,0])
+                bx, by, bw, bh = bbox
+                if bx <= x <= bx + bw and by <= y <= by + bh:
+                    target_text = str(elem.get("text", "")).lower()
+                    break
+                    
+        HIGH_RISK_KEYWORDS = ("delete", "remove", "destroy", "cancel", "erase", "send", "submit", "post", "pay", "buy", "purchase", "close", "quit", "exit")
+        if any(kw in target_text for kw in HIGH_RISK_KEYWORDS):
+            return "high"
+        
+        if button in ("right", "double"):
+            return "medium"
+        
+        return "medium"
+        
+    return "medium"
 
 
 
@@ -404,24 +457,64 @@ async def handle_agent_step_execute(message: dict, client_id: str):
         proposed_action = message.get("action", {})
         tool = proposed_action.get("tool")
         args = proposed_action.get("args", {})
+        is_denied = message.get("denied", False)
         
-        logger.info(f"Executing agent step: tool={tool}, args={args}")
+        logger.info(f"Executing agent step: tool={tool}, args={args}, denied={is_denied}")
         
+        # ── Capture Before Screenshot ──
+        base64_before = ""
+        if last_screenshot_bytes:
+            base64_before = "data:image/jpeg;base64," + base64.b64encode(last_screenshot_bytes).decode("utf-8")
+            
+        risk_level = classify_action_risk(tool, args)
+        
+        # ── Handle User Denied Action (Supervised Mode Alternative Request) ──
+        if is_denied:
+            import datetime
+            agent_history.append({
+                "tool": tool,
+                "args": args,
+                "result": "denied by user",
+                "timestamp": datetime.datetime.now().strftime("%H:%M:%S"),
+                "before_img": base64_before,
+                "after_img": base64_before,
+                "risk": risk_level
+            })
+            
+            # Invalidate cache and capture fresh screen state to ensure LLM has latest visual context
+            screen_parser.cache_elements = None
+            elements = await capture_and_parse_screen()
+            
+            next_action = await agent_executor.get_next_action(
+                query=current_task_query,
+                elements=elements,
+                history=agent_history,
+                image_bytes=last_screenshot_bytes
+            )
+            
+            await ws_manager.send_message({
+                "type": "agent_action_proposed",
+                "action": next_action,
+                "history": agent_history
+            }, client_id)
+            return
+            
         # ── Enhanced Loop Detection Guard ──
-        # Detects loops via multiple heuristics and escalates response:
-        # Level 1: Warn + re-read screen
-        # Level 2: Block action + inject explicit instruction to try different approach
-        # Level 3: Auto-finish task as failed
         MAX_AGENT_STEPS = 50
         CLICK_PROXIMITY_PX = 60
         
         if len(agent_history) >= MAX_AGENT_STEPS:
             logger.warning(f"Agent hit maximum step limit ({MAX_AGENT_STEPS}). Auto-finishing task.")
             is_agent_running = False
+            import datetime
             agent_history.append({
                 "tool": "finish",
                 "args": {"success": False, "message": f"Exceeded maximum step limit ({MAX_AGENT_STEPS})."},
-                "result": "auto-terminated"
+                "result": "auto-terminated",
+                "timestamp": datetime.datetime.now().strftime("%H:%M:%S"),
+                "before_img": base64_before,
+                "after_img": base64_before,
+                "risk": "low"
             })
             await ws_manager.send_message({
                 "type": "agent_finished",
@@ -488,10 +581,15 @@ async def handle_agent_step_execute(message: dict, client_id: str):
             if consecutive_loops >= 3:
                 logger.error(f"Agent stuck in unbreakable loop after {consecutive_loops} detections. Force-finishing.")
                 is_agent_running = False
+                import datetime
                 agent_history.append({
                     "tool": "finish",
                     "args": {"success": False, "message": f"Agent stuck in loop: {loop_reason}"},
-                    "result": "auto-terminated-loop"
+                    "result": "auto-terminated-loop",
+                    "timestamp": datetime.datetime.now().strftime("%H:%M:%S"),
+                    "before_img": base64_before,
+                    "after_img": base64_before,
+                    "risk": "low"
                 })
                 await ws_manager.send_message({
                     "type": "agent_finished",
@@ -524,10 +622,15 @@ async def handle_agent_step_execute(message: dict, client_id: str):
                     f"DO NOT click the same area again."
                 )
             
+            import datetime
             agent_history.append({
                 "tool": "read_screen",
                 "args": {},
-                "result": loop_msg
+                "result": loop_msg,
+                "timestamp": datetime.datetime.now().strftime("%H:%M:%S"),
+                "before_img": base64_before,
+                "after_img": base64_before,
+                "risk": "low"
             })
             
             next_action = await agent_executor.get_next_action(
@@ -547,8 +650,7 @@ async def handle_agent_step_execute(message: dict, client_id: str):
         if tool == "finish":
             # ── Verification Guard ──
             # Before accepting a finish, re-read the screen and ask the LLM
-            # to verify the task is actually complete. This prevents premature
-            # finishes where the agent clicked the wrong element but thinks it worked.
+            # to verify the task is actually complete.
             finish_success = args.get("success", True)
             
             if finish_success and len(agent_history) >= 2 and not agent_verification_done:
@@ -560,8 +662,8 @@ async def handle_agent_step_execute(message: dict, client_id: str):
                 await asyncio.sleep(1.0)  # Let UI settle
                 verify_elements = await capture_and_parse_screen()
                 
+                import datetime
                 # Inject verification context into a temporary history
-                # so the LLM knows it should verify the outcome
                 verify_history = list(agent_history) + [{
                     "tool": "read_screen",
                     "args": {},
@@ -597,7 +699,11 @@ async def handle_agent_step_execute(message: dict, client_id: str):
                             f"VERIFICATION: You tried to finish but the task is NOT complete. "
                             f"Screen re-read found {len(verify_elements)} elements. "
                             f"Continue working on the task."
-                        )
+                        ),
+                        "timestamp": datetime.datetime.now().strftime("%H:%M:%S"),
+                        "before_img": base64_before,
+                        "after_img": base64_before,
+                        "risk": "low"
                     })
                     
                     await ws_manager.send_message({
@@ -612,10 +718,15 @@ async def handle_agent_step_execute(message: dict, client_id: str):
             
             is_agent_running = False
             result_str = "task completed"
+            import datetime
             agent_history.append({
                 "tool": tool,
                 "args": args,
-                "result": result_str
+                "result": result_str,
+                "timestamp": datetime.datetime.now().strftime("%H:%M:%S"),
+                "before_img": base64_before,
+                "after_img": base64_before,
+                "risk": "low"
             })
             await ws_manager.send_message({
                 "type": "agent_finished",
@@ -694,48 +805,44 @@ async def handle_agent_step_execute(message: dict, client_id: str):
             # Guided mode: User executed this step manually
             result_str = "completed by user"
             
-        # Append execution result to history
-        agent_history.append({
-            "tool": tool,
-            "args": args,
-            "result": result_str
-        })
-        
-        # Always re-read the screen after state-changing actions so the LLM
-        # sees the current UI state. Without this, the agent reuses stale cached
-        # elements and repeats actions (e.g. pressing Win key twice, typing text
-        # twice) because it doesn't see the screen has already changed.
+        # Always re-read the screen after state-changing actions
         if tool == "read_screen":
-            # Screen was already captured during execution above
-            pass
+            elements = last_parsed_elements
         elif tool in ("open_app", "focus_app", "navigate_url"):
-            # open_app/focus_app already waited for the app to appear.
-            # Just refresh the screen state without extra delay.
             screen_parser.cache_elements = None
             logger.info(f"Auto-refreshing screen after '{tool}' action...")
             elements = await capture_and_parse_screen()
             result_str += f" | screen refreshed: {len(elements)} elements"
         elif tool in ("click", "type_text", "search_text", "key_press", "scroll"):
-            # Delay to let the OS render UI changes (Start menu appearing,
-            # text being typed, window focus changing, app launching, etc.)
-            # 1.0s is needed because apps like Notepad take ~1-2s to fully init.
             import asyncio
             await asyncio.sleep(1.0)
-            
-            # Invalidate cache and capture fresh screen state
             screen_parser.cache_elements = None
             logger.info(f"Auto-refreshing screen after '{tool}' action...")
             elements = await capture_and_parse_screen()
             result_str += f" | screen refreshed: {len(elements)} elements"
         else:
-            # For wait and other non-UI actions, use cached elements
             elements = last_parsed_elements
             
+        # ── Capture After Screenshot ──
+        base64_after = ""
+        if last_screenshot_bytes:
+            base64_after = "data:image/jpeg;base64," + base64.b64encode(last_screenshot_bytes).decode("utf-8")
+            
+        import datetime
+        agent_history.append({
+            "tool": tool,
+            "args": args,
+            "result": result_str,
+            "timestamp": datetime.datetime.now().strftime("%H:%M:%S"),
+            "before_img": base64_before,
+            "after_img": base64_after,
+            "risk": risk_level
+        })
+        
         if not is_agent_running:
             logger.info("Agent execution was aborted. Stopping step execution.")
             return
-
-        # Get next action proposal from LLM
+            
         next_action = await agent_executor.get_next_action(
             query=current_task_query,
             elements=elements,
@@ -747,13 +854,21 @@ async def handle_agent_step_execute(message: dict, client_id: str):
             logger.info("Agent execution was aborted. Suppressing next action proposal.")
             return
             
-        # Send proposed action to frontend
         await ws_manager.send_message({
             "type": "agent_action_proposed",
             "action": next_action,
             "history": agent_history
         }, client_id)
         
+    except (pyautogui.FailSafeException, UserInterventionException) as e:
+        logger.warning(f"Agent execution halted due to user intervention: {e}")
+        is_agent_running = False
+        await ws_manager.send_message({
+            "type": "agent_aborted",
+            "message": f"Agent paused — you moved the mouse or triggered failsafe: {str(e)}",
+            "history": agent_history
+        }, client_id)
+        return
     except Exception as e:
         logger.error(f"Error executing agent step: {e}", exc_info=True)
         await ws_manager.send_error(f"Agent execution error: {str(e)}", client_id)
@@ -771,6 +886,57 @@ async def handle_agent_abort(message: dict, client_id: str):
     }, client_id)
 
 
+async def handle_agent_undo(message: dict, client_id: str):
+    """Undo the last executed agent step, send ctrl+z, and propose next action"""
+    global agent_executor, actuator, last_parsed_elements, last_screenshot_bytes
+    global is_agent_running, current_task_query, agent_history
+    
+    if not is_agent_running:
+        await ws_manager.send_error("Agent is not currently running.", client_id)
+        return
+        
+    try:
+        if not agent_history:
+            logger.warning("Agent undo requested but history is empty.")
+            return
+            
+        # Pop the last step from history
+        undone_step = agent_history.pop()
+        logger.info(f"Undoing last step: {undone_step.get('tool')}")
+        
+        # Simulate Ctrl+Z to undo OS state
+        if actuator is None:
+            from task.actuator import Actuator
+            actuator = Actuator()
+        
+        actuator.key_press("ctrl+z")
+        import asyncio
+        await asyncio.sleep(1.0) # Wait for undo to settle
+        
+        # Recapture screen and parse elements
+        screen_parser.cache_elements = None
+        elements = await capture_and_parse_screen()
+        
+        # Query LLM for new next step
+        next_action = await agent_executor.get_next_action(
+            query=current_task_query,
+            elements=elements,
+            history=agent_history,
+            image_bytes=last_screenshot_bytes
+        )
+        
+        # Send new proposed action to frontend
+        await ws_manager.send_message({
+            "type": "agent_action_proposed",
+            "action": next_action,
+            "history": agent_history
+        }, client_id)
+        
+    except Exception as e:
+        logger.error(f"Error handling agent undo: {e}", exc_info=True)
+        await ws_manager.send_error(f"Agent undo error: {str(e)}", client_id)
+
+
 # Register message handlers
 ws_manager.register_handler(MessageType.SCREENSHOT, handle_screenshot)
 ws_manager.register_handler(MessageType.TASK_START, handle_task_start)
@@ -780,9 +946,10 @@ ws_manager.register_handler("save_settings", handle_save_settings)
 ws_manager.register_handler("step_result", handle_step_result)
 ws_manager.register_handler("download_models", handle_download_models)
 ws_manager.register_handler("cancel_download", handle_cancel_download)
-ws_manager.register_handler("agent_start", handle_agent_start)
+ws_manager.register_handler("agent_start", handle_start := handle_agent_start)
 ws_manager.register_handler("agent_step_execute", handle_agent_step_execute)
 ws_manager.register_handler("agent_abort", handle_agent_abort)
+ws_manager.register_handler("agent_undo", handle_agent_undo)
 
 
 @app.get("/health")
